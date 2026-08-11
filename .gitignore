@@ -12,3 +12,10 @@ docs/flasher/bins/
 
 # Cursor IDE — pasta local (memórias, regras experimentais); não versionar
 .cursor/
+
+# Paper IEEE LARS 2026 — fontes, datasets e bags ficam fora do repo de firmware
+paper/
+texput.log
+
+# Backup gerado pelo build do ESP32_Display_Panel ao reescrever o manifesto IDF
+src/idf_component.yml.orig

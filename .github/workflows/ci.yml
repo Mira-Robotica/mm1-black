@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, "feat/**"]
   pull_request:
     branches: [main, dev]
 
@@ -48,3 +48,30 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 90
+
+  # ESP32-P4 target (v1.0.0). Bring-up only for now — no release artifact yet.
+  build-p4:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio/.cache
+          key: ${{ runner.os }}-pio-p4-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-pio-p4-
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build mm1_p4
+        run: pio run -e mm1_p4
