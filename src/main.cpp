@@ -5185,14 +5185,11 @@ static void sd_init()
 static void sensor_init()
 {
 #if defined(MM1_BOARD_P4)
-    /* Dedicated Wire1 — board I2C0 is owned by GT911 (legacy driver). */
-    Wire1.begin(I2C_SDA, I2C_SCL, 100000);
-    delay(200);
-#if IMU_INT >= 0
-    pinMode(IMU_INT, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(IMU_INT), imuISR, FALLING);
-#endif
-    imu_ok = bno08x.begin_I2C(IMU_ADDR, &Wire1);
+    /* IDF aborts if Wire (i2c_master) coexists with Display_Panel's legacy
+     * driver/i2c.h — even on a second port. IMU stays off until SH-2 talks
+     * through the legacy bus. */
+    imu_ok = false;
+    DBG_PRINT("[IMU] skipped (legacy/ng I2C conflict)\n");
 #else
     Wire.begin(I2C_SDA, I2C_SCL, 100000);
     delay(200);
@@ -5207,7 +5204,6 @@ static void sensor_init()
     attachInterrupt(digitalPinToInterrupt(IMU_INT), imuISR, FALLING);
 
     imu_ok = bno08x.begin_I2C(IMU_ADDR, &Wire);
-#endif
     if (imu_ok) {
         bno08x.enableReport(SH2_ROTATION_VECTOR, 20000);
         delay(50);
@@ -5215,6 +5211,7 @@ static void sensor_init()
         delay(50);
     }
     DBG_PRINT("[IMU] %s\n", imu_ok ? "OK" : "FAIL");
+#endif
 
     lzr_init();
     DBG_PRINT("[LASER] %s (UART RX=%d TX=%d)\n",
