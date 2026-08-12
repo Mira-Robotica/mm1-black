@@ -21,21 +21,32 @@
 #include <string.h>
 #include <time.h>
 #include <Wire.h>
-#include <SPI.h>
-#include <TFT_eSPI.h>
 #include <Adafruit_BNO08x.h>
 #include <lvgl.h>
+#if defined(MM1_BOARD_P4)
+#include <SD_MMC.h>
+#define SD SD_MMC
+#include "board/p4/mm1_p4_pins.h"
+#include "board/p4/p4_board.h"
+#include "board/p4/p4_lvgl.h"
+#include "board/p4/p4_sd.h"
+#else
+#include <SPI.h>
+#include <TFT_eSPI.h>
 #include <SD.h>
+#endif
 #ifdef ARDUINO_ARCH_ESP32
 #include <Preferences.h>
 #include <cinttypes>
 #include <esp_log.h>
+#if !defined(MM1_BOARD_P4)
 #include <esp_gap_ble_api.h>
 #include <WiFi.h>
 #include <WebServer.h>
 #include <esp_wifi.h>
 #include <esp_coexist.h>
 #include "esp32-hal-ledc.h"
+#endif
 #include "extra/libs/qrcode/lv_qrcode.h"
 #include "web_portal.h"
 #include "sap6_ble.h"
@@ -50,6 +61,38 @@
 extern const uint8_t mira_splash_map[];
 
 // ── Pins ─────────────────────────────────────────────────────────────────────
+#if defined(MM1_BOARD_P4)
+#define SCREEN_W  MM1_LCD_W
+#define SCREEN_H  MM1_LCD_H
+#define MIRA_SPLASH_W SCREEN_W
+#define MIRA_SPLASH_H SCREEN_H
+#define UI_COMPACT_HEADER 0
+#ifndef SPLASH_MS
+#define SPLASH_MS 400UL
+#endif
+#define I2C_SDA         MM1_IMU_SDA
+#define I2C_SCL         MM1_IMU_SCL
+#define USER_BUTTON_PIN MM1_USER_BUTTON
+#define IMU_RST_PIN     MM1_IMU_RST
+#define IMU_INT         MM1_IMU_INT
+#define IMU_ADDR        MM1_IMU_ADDR
+#define BAT_ADC_PIN     MM1_BAT_ADC
+#define AUDIO_EN_PIN    (-1)
+#define SPEAKER_PWM_PIN (-1)
+#define BUZZER_LEDC_CH  7
+#ifndef LZR_SHARE_USB_UART
+#define LZR_SHARE_USB_UART 0
+#endif
+#ifndef LZR_PIN_RX
+#define LZR_PIN_RX MM1_LZR_RX
+#endif
+#ifndef LZR_PIN_TX
+#define LZR_PIN_TX MM1_LZR_TX
+#endif
+#ifndef LZR_UART_NUM
+#define LZR_UART_NUM MM1_LZR_UART_NUM
+#endif
+#else
 /* TFT_eSPI rotation 0–3 (90° steps). Factory/original = 1 (480×320 landscape).
  * Rotation 2 (+90° from 1) was upside down on hardware — use 0 (−90°) or 3 (+180°). */
 #ifndef TFT_ROTATION
@@ -89,6 +132,7 @@ extern const uint8_t mira_splash_map[];
 #define BUZZER_LEDC_CH  7
 #define IMU_ADDR 0x4B
 #define BAT_ADC_PIN 34
+#endif
 
 /* Eixo do laser no referencial do sensor (corpo), normalizado em runtime.
  * Padrão +X na placa; se o laser apontar para +Y ou +Z, ajuste IMU_LASER_AXIS_{BX,BY,BZ}. */
@@ -231,7 +275,9 @@ extern const uint8_t mira_splash_map[];
 #define POSIX_FALLBACK_ANCHOR_SEC (1767225600UL)
 #endif
 
+#if !defined(MM1_BOARD_P4)
 static const uint16_t TOUCH_CAL[5] = { 254, 3643, 176, 3693, 7 };
+#endif
 
 // ── Colours ──────────────────────────────────────────────────────────────────
 #define C_BG        0xF0F4F8u
@@ -344,10 +390,12 @@ struct MeasPoint {
 };
 
 // ── Globals ──────────────────────────────────────────────────────────────────
+#if !defined(MM1_BOARD_P4)
 static TFT_eSPI          tft;
 #ifdef ARDUINO_ARCH_ESP32
 /** SD no HSPI: nunca usar `SPI.begin(...)` no VSPI global — TFT_eSPI (display + XPT2046) usa VSPI em 12/13/14. */
 static SPIClass sd_spi(HSPI);
+#endif
 #endif
 #ifdef ARDUINO_ARCH_ESP32
 static volatile bool g_bt_stack_ready = false;
@@ -606,6 +654,10 @@ static void bt_refresh_bond_state(void);
 /** Refresh BLE bond list (TopoDroid / SexyTopo pair in Android settings first). */
 static void bt_refresh_bond_state(void)
 {
+#if defined(MM1_BOARD_P4)
+    g_bt_paired = false;
+    g_bt_peer_mac[0] = '\0';
+#else
     int n = esp_ble_get_bond_device_num();
     if (n <= 0) {
         g_bt_paired = false;
@@ -623,6 +675,7 @@ static void bt_refresh_bond_state(void)
         g_bt_paired = false;
         g_bt_peer_mac[0] = '\0';
     }
+#endif
 }
 
 static void bt_clear_all_bonds(void)
@@ -664,15 +717,24 @@ static void sap6_process_pending_cmds(void)
 
 static void audio_init_hw()
 {
+#if defined(MM1_BOARD_P4)
+    /* Buzzer path TBD (ES8311 codec on this carrier). */
+    return;
+#else
     pinMode(AUDIO_EN_PIN, OUTPUT);
     digitalWrite(AUDIO_EN_PIN, LOW);
     ledcSetup(BUZZER_LEDC_CH, 1000, 10);
     ledcAttachPin(SPEAKER_PWM_PIN, BUZZER_LEDC_CH);
     ledcWrite(BUZZER_LEDC_CH, 0);
+#endif
 }
 
 static void buzzer_note(unsigned freq_hz, unsigned dur_ms)
 {
+#if defined(MM1_BOARD_P4)
+    (void)freq_hz;
+    delay(dur_ms);
+#else
     if (freq_hz == 0) {
         delay(dur_ms);
         return;
@@ -680,6 +742,7 @@ static void buzzer_note(unsigned freq_hz, unsigned dur_ms)
     ledcWriteTone(BUZZER_LEDC_CH, freq_hz);
     delay(dur_ms);
     ledcWriteTone(BUZZER_LEDC_CH, 0);
+#endif
 }
 
 static void play_boot_chime()
@@ -727,6 +790,9 @@ static void play_error_sound() {}
 #endif
 
 // ── Display / touch ──────────────────────────────────────────────────────────
+#if defined(MM1_BOARD_P4)
+/* Provided by p4_lvgl — registered inside p4_lvgl_init(). */
+#else
 static void disp_flush(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *c)
 {
     uint32_t w = area->x2 - area->x1 + 1, h = area->y2 - area->y1 + 1;
@@ -770,6 +836,7 @@ static void touch_read(lv_indev_drv_t *drv, lv_indev_data_t *data)
     }
     data->continue_reading = false;
 }
+#endif /* !MM1_BOARD_P4 */
 
 // ── Sensor functions ─────────────────────────────────────────────────────────
 #if LZR_SHARE_USB_UART
@@ -3875,7 +3942,9 @@ static void prefs_load_backlight(void)
 
 static void tft_bl_init(void)
 {
-#if defined(TFT_BL) && defined(ARDUINO_ARCH_ESP32)
+#if defined(MM1_BOARD_P4)
+    /* Backlight PWM owned by ESP32_Display_Panel. */
+#elif defined(TFT_BL) && defined(ARDUINO_ARCH_ESP32)
     ledcSetup(TFT_BL_LEDC_CH, 5000, 8);
     ledcAttachPin(TFT_BL, TFT_BL_LEDC_CH);
     g_bl_pwm_attached = true;
@@ -3890,7 +3959,13 @@ static void tft_bl_apply(uint8_t pct)
         pct = 100;
     g_backlight_pct = pct;
 
-#if defined(TFT_BL) && defined(ARDUINO_ARCH_ESP32)
+#if defined(MM1_BOARD_P4)
+    if (auto board = p4_board_get()) {
+        if (auto bl = board->getBacklight()) {
+            bl->setBrightness(pct);
+        }
+    }
+#elif defined(TFT_BL) && defined(ARDUINO_ARCH_ESP32)
     if (g_bl_pwm_attached) {
         const uint32_t pwm = ((uint32_t)pct * 255U + 50U) / 100U;
         ledcWrite(TFT_BL_LEDC_CH, (uint8_t)pwm);
@@ -5093,6 +5168,9 @@ static void build_ui()
 // ── Init helpers ─────────────────────────────────────────────────────────────
 static void sd_init()
 {
+#if defined(MM1_BOARD_P4)
+    sd_ready = p4_sd_ready();
+#else
 #ifdef ARDUINO_ARCH_ESP32
     sd_spi.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
     sd_ready = SD.begin(SD_CS, sd_spi, 4000000U);
@@ -5100,11 +5178,22 @@ static void sd_init()
     SPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
     sd_ready = SD.begin(SD_CS);
 #endif
+#endif
     DBG_PRINT("[SD] %s\n", sd_ready ? "OK" : "Not found");
 }
 
 static void sensor_init()
 {
+#if defined(MM1_BOARD_P4)
+    /* Dedicated Wire1 — board I2C0 is owned by GT911 (legacy driver). */
+    Wire1.begin(I2C_SDA, I2C_SCL, 100000);
+    delay(200);
+#if IMU_INT >= 0
+    pinMode(IMU_INT, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(IMU_INT), imuISR, FALLING);
+#endif
+    imu_ok = bno08x.begin_I2C(IMU_ADDR, &Wire1);
+#else
     Wire.begin(I2C_SDA, I2C_SCL, 100000);
     delay(200);
 #if IMU_RST_PIN >= 0
@@ -5118,6 +5207,7 @@ static void sensor_init()
     attachInterrupt(digitalPinToInterrupt(IMU_INT), imuISR, FALLING);
 
     imu_ok = bno08x.begin_I2C(IMU_ADDR, &Wire);
+#endif
     if (imu_ok) {
         bno08x.enableReport(SH2_ROTATION_VECTOR, 20000);
         delay(50);
@@ -5135,6 +5225,9 @@ static void sensor_init()
 /** Splash antes da UI LVGL — logo + boot chime em paralelo (tempo mínimo SPLASH_MS). */
 static void show_boot_splash_tft(void)
 {
+#if defined(MM1_BOARD_P4)
+    delay(SPLASH_MS);
+#else
     tft.fillScreen(TFT_BLACK);
     if (MIRA_SPLASH_W == SCREEN_W && MIRA_SPLASH_H == SCREEN_H) {
         tft.startWrite();
@@ -5153,6 +5246,7 @@ static void show_boot_splash_tft(void)
 #else
     delay(SPLASH_MS);
 #endif
+#endif
 }
 
 void setup()
@@ -5167,6 +5261,33 @@ void setup()
     DBG_PRINT("\n[MM1-BLACK] Boot\n");
 #endif
 
+#if defined(MM1_BOARD_P4)
+    if (!p4_board_init(nullptr)) {
+        Serial.println("FATAL: p4_board_init");
+        while (1) delay(1000);
+    }
+#ifdef ARDUINO_ARCH_ESP32
+    prefs_load_backlight();
+    tft_bl_init();
+    tft_bl_apply(g_backlight_pct);
+#endif
+    show_boot_splash_tft();
+    if (USER_BUTTON_PIN >= 0)
+        pinMode(USER_BUTTON_PIN, INPUT_PULLUP);
+    sd_init();
+    sensor_init();
+#ifdef ARDUINO_ARCH_ESP32
+    sap6_ble_begin(BT_DEVICE_NAME);
+    sap6_ble_get_mac_str(g_bt_local_mac, sizeof(g_bt_local_mac));
+    bt_refresh_bond_state();
+    g_bt_stack_ready = sap6_ble_stack_ready();
+#endif
+    if (!p4_lvgl_init(p4_board_get())) {
+        Serial.println("FATAL: p4_lvgl_init");
+        while (1) delay(1000);
+    }
+    g_lv_disp = lv_disp_get_default();
+#else
     tft.init();
     tft.setRotation(TFT_ROTATION);
     tft.setTouch(const_cast<uint16_t*>(TOUCH_CAL));
@@ -5183,8 +5304,6 @@ void setup()
     pinMode(USER_BUTTON_PIN, INPUT_PULLUP);
 
     sd_init();
-#ifdef ARDUINO_ARCH_ESP32
-#endif
     sensor_init();
 
 #ifdef ARDUINO_ARCH_ESP32
@@ -5213,6 +5332,12 @@ void setup()
     lv_disp_t *disp = lv_disp_drv_register(&dd);
     g_lv_disp = disp;
 
+    static lv_indev_drv_t id;
+    lv_indev_drv_init(&id);
+    id.type=LV_INDEV_TYPE_POINTER; id.read_cb=touch_read;
+    lv_indev_drv_register(&id);
+#endif
+
     if (sd_ready) {
         if (!SD.exists(active_csv)) {
             File f=SD.open(active_csv,FILE_WRITE);
@@ -5220,11 +5345,6 @@ void setup()
         }
         load_csv_request();
     }
-
-    static lv_indev_drv_t id;
-    lv_indev_drv_init(&id);
-    id.type=LV_INDEV_TYPE_POINTER; id.read_cb=touch_read;
-    lv_indev_drv_register(&id);
 
     prefs_load_az_offset();
     prefs_load_geometry();
