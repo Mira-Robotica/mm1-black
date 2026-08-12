@@ -20,8 +20,6 @@
 #include <math.h>
 #include <string.h>
 #include <time.h>
-#include <Wire.h>
-#include <Adafruit_BNO08x.h>
 #include <lvgl.h>
 #if defined(MM1_BOARD_P4)
 #include <SD_MMC.h>
@@ -30,7 +28,11 @@
 #include "board/p4/p4_board.h"
 #include "board/p4/p4_lvgl.h"
 #include "board/p4/p4_sd.h"
+/* Do NOT include Wire.h / Adafruit_BNO08x — linking Wire pulls i2c_master (ng)
+ * and aborts when Display_Panel installs the legacy I2C driver. */
 #else
+#include <Wire.h>
+#include <Adafruit_BNO08x.h>
 #include <SPI.h>
 #include <TFT_eSPI.h>
 #include <SD.h>
@@ -427,8 +429,10 @@ static int           g_csv_load_skipped        = 0;
 #define CSV_LOAD_TIME_BUDGET_MS  45
 #define CSV_LOAD_TIMEOUT_MS      45000UL
 #endif
+#if !defined(MM1_BOARD_P4)
 static Adafruit_BNO08x   bno08x(-1);
 static sh2_SensorValue_t sensorValue;
+#endif
 
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t        *lvgl_buf = nullptr;
@@ -1320,6 +1324,9 @@ static void imu_update_angles_from_quat(float qw, float qx, float qy, float qz)
 
 static void poll_imu()
 {
+#if defined(MM1_BOARD_P4)
+    (void)imu_ok;
+#else
     if (!imu_ok) return;
     if (bno08x.wasReset()) {
         bno08x.enableReport(SH2_ROTATION_VECTOR, 20000);
@@ -1341,6 +1348,7 @@ static void poll_imu()
             imu_grav_mag = sqrtf(ax * ax + ay * ay + az * az);
         }
     }
+#endif
 }
 
 /** BLOCKING: request one laser reading before storing a point (POINTS/FILES); SENSOR tab uses continuous polling. */
