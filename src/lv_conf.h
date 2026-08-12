@@ -1,7 +1,8 @@
 /**
  * @file lv_conf.h
  * LVGL 8.3 configuration for MM1-BLACK
- * ESP32 CYD  -  ST7796 480x320 display (landscape)
+ * CYD (denky32): ST7796 480x320 — MM1_BOARD_P4 unset
+ * P4 (mm1_p4):  ST7701 480x800 — MM1_BOARD_P4=1, larger heap pool + DPI
  */
 
 /* clang-format off */
@@ -24,9 +25,22 @@
 /*=========================
    MEMORY SETTINGS
  *=========================*/
+/* P4: custom alloc avoids a 256 KB .bss pool that breaks the RISC-V linker
+ * (--enable-non-contiguous-regions discards .sbss from lvgl). CYD keeps the
+ * small static pool that the POINTS UI was tuned for. */
+#if defined(MM1_BOARD_P4)
+#define LV_MEM_CUSTOM 1
+#if LV_MEM_CUSTOM == 0
+    #define LV_MEM_SIZE (48U * 1024U)
+    #define LV_MEM_ADR 0
+#endif
+#define LV_MEM_CUSTOM_INCLUDE <stdlib.h>
+#define LV_MEM_CUSTOM_ALLOC   malloc
+#define LV_MEM_CUSTOM_FREE    free
+#define LV_MEM_CUSTOM_REALLOC realloc
+#else
 #define LV_MEM_CUSTOM 0
 #if LV_MEM_CUSTOM == 0
-    /* Tabela POINTS desenha de pts[] (celulas vazias); 48KB + layer 24KB. */
     #define LV_MEM_SIZE (48U * 1024U)
     #define LV_MEM_ADR 0
     #if LV_MEM_ADR == 0
@@ -38,6 +52,7 @@
     #define LV_MEM_CUSTOM_ALLOC   malloc
     #define LV_MEM_CUSTOM_FREE    free
     #define LV_MEM_CUSTOM_REALLOC realloc
+#endif
 #endif
 #define LV_MEM_BUF_MAX_NUM 16
 #define LV_MEMCPY_MEMSET_STD 0
@@ -54,7 +69,11 @@
     #define LV_TICK_CUSTOM_SYS_TIME_EXPR (millis())
 #endif
 
+#if defined(MM1_BOARD_P4)
+#define LV_DPI_DEF 220
+#else
 #define LV_DPI_DEF 130
+#endif
 
 /*=======================
  * FEATURE CONFIGURATION

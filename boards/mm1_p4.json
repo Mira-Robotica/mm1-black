@@ -3,7 +3,10 @@
     "core": "esp32",
     "extra_flags": [
       "-DBOARD_HAS_PSRAM",
-      "-DARDUINO_USB_CDC_ON_BOOT=0"
+      "-DARDUINO_USB_CDC_ON_BOOT=0",
+      "-DBOARD_HAS_SDMMC",
+      "-DBOARD_SDMMC_SLOT=0",
+      "-DBOARD_SDMMC_POWER_CHANNEL=4"
     ],
     "f_cpu": "360000000L",
     "f_flash": "80000000L",
