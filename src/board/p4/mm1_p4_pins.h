@@ -2,8 +2,11 @@
  * @file mm1_p4_pins.h
  * @brief Pin map — Waveshare ESP32-P4-WIFI6-Touch-LCD-4.3 + MM1 peripherals.
  *
- * On-board signals: Waveshare BSP + schematic.
- * Header peripherals: chosen free GPIOs (16–22 cluster on the 40-pin header).
+ * On-board signals: Waveshare BSP + schematic
+ *   docs/datasheets/ESP32-P4-WIFI6-Touch-LCD-4.3-schematic.pdf
+ *
+ * J3 40-pin silk labels are ESP32-P4 GPIO numbers (SDA/SCL = GPIO7/8).
+ * GPIOs 16–20 are reserved for the ESP32-C6 SDIO link — not on J3.
  */
 
 #pragma once
@@ -31,7 +34,7 @@
 #define MM1_SD_D3          42
 #define MM1_SD_LDO_CHAN    4
 
-// ── Audio (unused by MM1 for now) ───────────────────────────────────────────
+// ── Audio (ES8311 path in p4_boot; not a GPIO piezo) ───────────────────────
 #define MM1_I2S_MCLK       13
 #define MM1_I2S_SCLK       12
 #define MM1_I2S_LCLK       10
@@ -39,21 +42,27 @@
 #define MM1_I2S_DSIN       11
 #define MM1_AMP_EN         53
 
-// ── MM1 on 40-pin header ────────────────────────────────────────────────────
-/* BNO086 on Wire1 (not the touch bus): Display_Panel owns I2C0 with the legacy
- * driver; Wire uses i2c_master and the two cannot share a bus. Wire IMU to these
- * pins (3V3 + GND). Address still 0x4B. */
+// ── MM1 on J3 (40-pin) ──────────────────────────────────────────────────────
+/* BNO086 on the silk SDA/SCL pads (shared bus GPIO7/8 with touch/codecs).
+ * Address 0x4B — no clash with GT911 (0x5D), ES8311 (0x18), ES7210 (0x40).
+ * Firmware still skips IMU until SH-2 talks over the legacy I2C driver
+ * (Wire/i2c_master cannot coexist with Display_Panel). INT unused (poll only). */
 #define MM1_IMU_ADDR       0x4B
-#define MM1_IMU_SDA        16
-#define MM1_IMU_SCL        17
-#define MM1_IMU_INT        18
+#define MM1_IMU_SDA        MM1_I2C_SDA   /* silk SDA */
+#define MM1_IMU_SCL        MM1_I2C_SCL   /* silk SCL */
+#define MM1_IMU_INT        (-1)
 #define MM1_IMU_RST        (-1)
 
 #define MM1_LZR_UART_NUM   1
-#define MM1_LZR_RX         21   // module TX → ESP RX
-#define MM1_LZR_TX         20   // module RX → ESP TX
+#define MM1_LZR_RX         21   /* silk 21 — module TX → ESP RX */
+#define MM1_LZR_TX         22   /* silk 22 — module RX → ESP TX */
 #define MM1_LZR_ENA        (-1)
 
-#define MM1_USER_BUTTON    19   // active low, INPUT_PULLUP
+/* Capture button: silk GPIO5 sits next to GND — wire button to 5↔GND (active low).
+ * Alternatives: GPIO2 / GPIO3 / GPIO4 (also free on J3). */
+#define MM1_USER_BUTTON    5
 
-#define MM1_BAT_ADC        (-1) // LiPo sense not exposed on this carrier
+#define MM1_BUZZER_PIN     (-1) /* chimes via ES8311; no spare piezo GPIO reserved */
+#define MM1_BUZZER_LEDC_CH 7
+
+#define MM1_BAT_ADC        (-1) /* LiPo sense not exposed on this carrier */

@@ -86,19 +86,20 @@ The board ships **ECO2 silicon** (`ESP-ROM:esp32p4-eco2`), so `boards/mm1_p4.jso
 use `chip_variant = esp32p4_es` and `f_cpu = 360000000L`. The plain `esp32p4` variant
 panics with an illegal instruction inside the bootloader.
 
-## Open hardware questions
+## J3 peripheral pin map
 
-The pins in `src/board/p4/mm1_p4_pins.h` are confirmed against the BSP and schematic.
-The ones marked `TBD` still need a free pin picked from the 40-pin header:
+Settled in `src/board/p4/mm1_p4_pins.h` (silk labels on the 40-pin header):
 
-- IMU interrupt (BNO086)
-- Laser rangefinder UART RX/TX
-- Capture button
-- Battery voltage sense, if the board exposes it at all
+| Function | Silk / GPIO | Notes |
+|---|---|---|
+| IMU SDA / SCL | SDA / SCL (= 7 / 8) | Shared bus with GT911 / codecs; BNO086 @ `0x4B` |
+| IMU INT | — | Not used (firmware polls) |
+| Laser RX / TX | 21 / 22 | Module TX→21, module RX→22; swap if no UART data |
+| Capture button | 5 | Wire to GND (active low); alts: 2 / 3 / 4 |
+| Battery ADC | — | Not exposed on this carrier |
 
-The BNO086 keeps address `0x4B`, which does not collide with the devices already on
-the shared I²C bus: GT911 (0x5D/0x14), ES8311 (0x18), ES7210 (0x40/0x41),
-camera (0x36).
+Schematic: `docs/datasheets/ESP32-P4-WIFI6-Touch-LCD-4.3-schematic.pdf`.
+GPIOs 16–20 are the ESP32-C6 SDIO link and do **not** appear on J3.
 
 ## Port order
 

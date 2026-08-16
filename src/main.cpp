@@ -26,6 +26,7 @@
 #define SD SD_MMC
 #include "board/p4/mm1_p4_pins.h"
 #include "board/p4/p4_board.h"
+#include "board/p4/p4_boot.h"
 #include "board/p4/p4_lvgl.h"
 #include "board/p4/p4_sd.h"
 /* Do NOT include Wire.h / Adafruit_BNO08x — linking Wire pulls i2c_master (ng)
@@ -66,11 +67,12 @@ extern const uint8_t mira_splash_map[];
 #if defined(MM1_BOARD_P4)
 #define SCREEN_W  MM1_LCD_W
 #define SCREEN_H  MM1_LCD_H
-#define MIRA_SPLASH_W SCREEN_W
-#define MIRA_SPLASH_H SCREEN_H
+/* Asset in mira_splash_img.c is still the CYD portrait bitmap; centered on 480×800. */
+#define MIRA_SPLASH_W 320
+#define MIRA_SPLASH_H 480
 #define UI_COMPACT_HEADER 0
 #ifndef SPLASH_MS
-#define SPLASH_MS 400UL
+#define SPLASH_MS 900UL
 #endif
 #define I2C_SDA         MM1_IMU_SDA
 #define I2C_SCL         MM1_IMU_SCL
@@ -79,9 +81,9 @@ extern const uint8_t mira_splash_map[];
 #define IMU_INT         MM1_IMU_INT
 #define IMU_ADDR        MM1_IMU_ADDR
 #define BAT_ADC_PIN     MM1_BAT_ADC
-#define AUDIO_EN_PIN    (-1)
+#define AUDIO_EN_PIN    MM1_AMP_EN
 #define SPEAKER_PWM_PIN (-1)
-#define BUZZER_LEDC_CH  7
+#define BUZZER_LEDC_CH  MM1_BUZZER_LEDC_CH
 #ifndef LZR_SHARE_USB_UART
 #define LZR_SHARE_USB_UART 0
 #endif
@@ -536,6 +538,7 @@ static void cap_ui_invalidate_pts_hdr(void);
 static lv_obj_t *ui_lbl_tof_val  = nullptr;
 static lv_obj_t *ui_lbl_imu_val  = nullptr;
 static lv_obj_t *ui_lbl_sens_stat= nullptr;
+static lv_obj_t *ui_lbl_sens_btn = nullptr;
 static lv_obj_t *ui_tbl_files    = nullptr;
 static lv_obj_t *ui_lbl_active   = nullptr;
 static lv_obj_t *ui_lbl_fstatus  = nullptr;
@@ -567,6 +570,10 @@ static bool        g_bl_ui_sync       = false;
 static float       g_azimuth_offset_deg = AZIMUTH_OFFSET_DEG;
 static bool        g_mm1_proj_top        = false;
 static float       g_mm1_range_offset_mm = 0.f;
+
+/* Capture button (physical) — shared with SENSOR status + debounce path below. */
+static bool          user_btn_cap_armed = false;
+static uint32_t      g_btn_tap_count    = 0;
 
 // Tab order: 0=POINTS, 1=SENSOR, 2=FILES, 3=SETUP (lv_tabview_add_tab order).
 static uint8_t     ui_active_tab    = 0;
@@ -722,8 +729,7 @@ static void sap6_process_pending_cmds(void)
 static void audio_init_hw()
 {
 #if defined(MM1_BOARD_P4)
-    /* Buzzer path TBD (ES8311 codec on this carrier). */
-    return;
+    p4_boot_audio_init();
 #else
     pinMode(AUDIO_EN_PIN, OUTPUT);
     digitalWrite(AUDIO_EN_PIN, LOW);
@@ -736,8 +742,7 @@ static void audio_init_hw()
 static void buzzer_note(unsigned freq_hz, unsigned dur_ms)
 {
 #if defined(MM1_BOARD_P4)
-    (void)freq_hz;
-    delay(dur_ms);
+    p4_boot_buzzer_note(freq_hz, dur_ms);
 #else
     if (freq_hz == 0) {
         delay(dur_ms);
@@ -1822,14 +1827,42 @@ static void refresh_sensor_display()
         lv_label_set_text(ui_lbl_tof_val, buf);
     }
     if (ui_lbl_imu_val) {
-        snprintf(buf, sizeof(buf), "Az: %.1f\xC2\xB0   Inc: %.1f\xC2\xB0   Roll: %.1f\xC2\xB0",
-                 imu_azimuth_deg, imu_inclination_deg, imu_roll);
-        lv_label_set_text(ui_lbl_imu_val, buf);
+        if (!imu_ok) {
+            lv_label_set_text(ui_lbl_imu_val, "offline");
+        } else {
+            snprintf(buf, sizeof(buf), "Az: %.1f\xC2\xB0   Inc: %.1f\xC2\xB0   Roll: %.1f\xC2\xB0",
+                     imu_azimuth_deg, imu_inclination_deg, imu_roll);
+            lv_label_set_text(ui_lbl_imu_val, buf);
+        }
     }
     if (ui_lbl_sens_stat) {
         snprintf(buf, sizeof(buf), "LASER: %s   IMU: %s",
                  tof_ok ? "OK" : "FAIL", imu_ok ? "OK" : "FAIL");
         lv_label_set_text(ui_lbl_sens_stat, buf);
+    }
+    if (ui_lbl_sens_btn) {
+        if (USER_BUTTON_PIN < 0) {
+            lv_label_set_text(ui_lbl_sens_btn, "not wired");
+            lv_obj_set_style_text_color(ui_lbl_sens_btn, lv_color_hex(C_GREY), 0);
+        } else {
+            const int raw = digitalRead(USER_BUTTON_PIN);
+            const char *st;
+            uint32_t col;
+            if (user_btn_cap_armed) {
+                st = "AIM (1st tap — laser on)";
+                col = C_CAP_AIM;
+            } else if (raw == LOW) {
+                st = "DOWN (pressed)";
+                col = C_HDR_OK_ON;
+            } else {
+                st = "UP (released)";
+                col = ucol_text();
+            }
+            snprintf(buf, sizeof(buf), "GPIO%d  %s  taps:%lu",
+                     USER_BUTTON_PIN, st, (unsigned long)g_btn_tap_count);
+            lv_label_set_text(ui_lbl_sens_btn, buf);
+            lv_obj_set_style_text_color(ui_lbl_sens_btn, lv_color_hex(col), 0);
+        }
     }
     if (ui_lbl_sens_temp) {
         if (isfinite(g_live_temp_c))
@@ -4194,6 +4227,7 @@ static void ui_apply_theme_colors(void)
     lbl_tx(ui_lbl_tof_val);
     lbl_tx(ui_lbl_imu_val);
     lbl_tx(ui_lbl_sens_stat);
+    lbl_tx(ui_lbl_sens_btn);
     lbl_tx(ui_lbl_sens_temp);
     lbl_tx(ui_lbl_setup_ver);
     lbl_tx(ui_lbl_setup_bl);
@@ -4818,8 +4852,10 @@ static void build_ui()
     ui_lbl_imu_val = val_lbl(ts, 80);
     sec_lbl(ts, 116, "STATUS");
     ui_lbl_sens_stat = val_lbl(ts, 138);
-    sec_lbl(ts, 174, "TEMPERATURE (MCU)");
-    ui_lbl_sens_temp = val_lbl(ts, 196);
+    sec_lbl(ts, 174, "CAPTURE BUTTON");
+    ui_lbl_sens_btn = val_lbl(ts, 196);
+    sec_lbl(ts, 232, "TEMPERATURE (MCU)");
+    ui_lbl_sens_temp = val_lbl(ts, 254);
 
     // ── FILES tab ────────────────────────────────────────────────────────
     lv_obj_t *tf = lv_tabview_add_tab(tv,
@@ -5231,7 +5267,16 @@ static void sensor_init()
 static void show_boot_splash_tft(void)
 {
 #if defined(MM1_BOARD_P4)
+    p4_boot_show_splash(mira_splash_map, MIRA_SPLASH_W, MIRA_SPLASH_H);
+#ifdef ARDUINO_ARCH_ESP32
+    const unsigned long t0 = millis();
+    play_boot_chime();
+    const unsigned long el = millis() - t0;
+    if (el < SPLASH_MS)
+        delay(SPLASH_MS - el);
+#else
     delay(SPLASH_MS);
+#endif
 #else
     tft.fillScreen(TFT_BLACK);
     if (MIRA_SPLASH_W == SCREEN_W && MIRA_SPLASH_H == SCREEN_H) {
@@ -5275,6 +5320,7 @@ void setup()
     prefs_load_backlight();
     tft_bl_init();
     tft_bl_apply(g_backlight_pct);
+    audio_init_hw();
 #endif
     show_boot_splash_tft();
     if (USER_BUTTON_PIN >= 0)
@@ -5370,7 +5416,6 @@ void setup()
 static int user_btn_last_raw = HIGH;
 static int user_btn_stable = HIGH;
 static unsigned long user_btn_edge_ms = 0;
-static bool user_btn_cap_armed = false;
 static unsigned long user_btn_cap_armed_ms = 0;
 static unsigned long user_btn_last_tap_ms = 0;
 
@@ -5443,6 +5488,7 @@ static void user_btn_on_press(void)
     if ((now - user_btn_last_tap_ms) < BTN_TAP_MIN_MS)
         return;
     user_btn_last_tap_ms = now;
+    g_btn_tap_count++;
 
     if (!user_btn_cap_armed) {
         user_btn_cap_arm();
