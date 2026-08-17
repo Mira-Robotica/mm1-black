@@ -24,9 +24,12 @@
 #if defined(MM1_BOARD_P4)
 #include <SD_MMC.h>
 #define SD SD_MMC
+#include <driver/gpio.h>
 #include "board/p4/mm1_p4_pins.h"
 #include "board/p4/p4_board.h"
 #include "board/p4/p4_boot.h"
+#include "board/p4/p4_imu.h"
+#include "board/p4/p4_btn.h"
 #include "board/p4/p4_lvgl.h"
 #include "board/p4/p4_sd.h"
 /* Do NOT include Wire.h / Adafruit_BNO08x — linking Wire pulls i2c_master (ng)
@@ -574,6 +577,9 @@ static float       g_mm1_range_offset_mm = 0.f;
 /* Capture button (physical) — shared with SENSOR status + debounce path below. */
 static bool          user_btn_cap_armed = false;
 static uint32_t      g_btn_tap_count    = 0;
+#if defined(MM1_BOARD_P4)
+static char          g_imu_scan_txt[48] = "—";
+#endif
 
 // Tab order: 0=POINTS, 1=SENSOR, 2=FILES, 3=SETUP (lv_tabview_add_tab order).
 static uint8_t     ui_active_tab    = 0;
@@ -1330,7 +1336,18 @@ static void imu_update_angles_from_quat(float qw, float qx, float qy, float qz)
 static void poll_imu()
 {
 #if defined(MM1_BOARD_P4)
-    (void)imu_ok;
+    if (!imu_ok)
+        return;
+    p4_imu_poll();
+    float qw, qx, qy, qz;
+    int acc = 0;
+    if (p4_imu_get_quat(&qw, &qx, &qy, &qz, &acc)) {
+        imu_rv_accuracy = acc;
+        imu_update_angles_from_quat(qw, qx, qy, qz);
+    }
+    float ax, ay, az;
+    if (p4_imu_get_accel(&ax, &ay, &az))
+        imu_grav_mag = sqrtf(ax * ax + ay * ay + az * az);
 #else
     if (!imu_ok) return;
     if (bno08x.wasReset()) {
@@ -1540,6 +1557,10 @@ static void lzr_aim_laser_keepalive_tick(unsigned long now)
 
 static void read_battery()
 {
+    if (BAT_ADC_PIN < 0) {
+        bat_pct = -1;
+        return;
+    }
     int raw = analogRead(BAT_ADC_PIN);
     // 12-bit ADC, 3.3V ref, typical voltage divider: adjust as needed
     float v = raw * 3.3f / 4095.0f * 2.0f;   // ×2 for divider
@@ -1828,7 +1849,12 @@ static void refresh_sensor_display()
     }
     if (ui_lbl_imu_val) {
         if (!imu_ok) {
+#if defined(MM1_BOARD_P4)
+            snprintf(buf, sizeof(buf), "offline  scan:%s", g_imu_scan_txt);
+            lv_label_set_text(ui_lbl_imu_val, buf);
+#else
             lv_label_set_text(ui_lbl_imu_val, "offline");
+#endif
         } else {
             snprintf(buf, sizeof(buf), "Az: %.1f\xC2\xB0   Inc: %.1f\xC2\xB0   Roll: %.1f\xC2\xB0",
                      imu_azimuth_deg, imu_inclination_deg, imu_roll);
@@ -1836,8 +1862,9 @@ static void refresh_sensor_display()
         }
     }
     if (ui_lbl_sens_stat) {
-        snprintf(buf, sizeof(buf), "LASER: %s   IMU: %s",
-                 tof_ok ? "OK" : "FAIL", imu_ok ? "OK" : "FAIL");
+        snprintf(buf, sizeof(buf), "LASER: %s  rx=%lu   IMU: %s",
+                 tof_ok ? "OK" : "FAIL", (unsigned long)lzr_rx_bytes_total,
+                 imu_ok ? "OK" : "FAIL");
         lv_label_set_text(ui_lbl_sens_stat, buf);
     }
     if (ui_lbl_sens_btn) {
@@ -1845,21 +1872,27 @@ static void refresh_sensor_display()
             lv_label_set_text(ui_lbl_sens_btn, "not wired");
             lv_obj_set_style_text_color(ui_lbl_sens_btn, lv_color_hex(C_GREY), 0);
         } else {
+#if defined(MM1_BOARD_P4)
+            const int raw = p4_btn_level();
+            const bool down = p4_btn_pressed();
+#else
             const int raw = digitalRead(USER_BUTTON_PIN);
+            const bool down = (raw == LOW);
+#endif
             const char *st;
             uint32_t col;
             if (user_btn_cap_armed) {
                 st = "AIM (1st tap — laser on)";
                 col = C_CAP_AIM;
-            } else if (raw == LOW) {
+            } else if (down) {
                 st = "DOWN (pressed)";
                 col = C_HDR_OK_ON;
             } else {
                 st = "UP (released)";
                 col = ucol_text();
             }
-            snprintf(buf, sizeof(buf), "GPIO%d  %s  taps:%lu",
-                     USER_BUTTON_PIN, st, (unsigned long)g_btn_tap_count);
+            snprintf(buf, sizeof(buf), "NO/C GPIO%d raw=%d %s taps:%lu",
+                     USER_BUTTON_PIN, raw, st, (unsigned long)g_btn_tap_count);
             lv_label_set_text(ui_lbl_sens_btn, buf);
             lv_obj_set_style_text_color(ui_lbl_sens_btn, lv_color_hex(col), 0);
         }
@@ -3653,8 +3686,11 @@ static void tabview_changed_cb(lv_event_t *e)
     }
     lzr_sync_poll_gap_now();
     lzr_next_poll_ms = millis();
-    if (tab == 1)
+    if (tab == 1) {
+        lzr_poll_state = 0;
+        lzr_next_poll_ms = millis();
         refresh_sensor_display();
+    }
     else if (tab == 2) {
         refresh_file_list();
         update_active_lbl();
@@ -3707,13 +3743,19 @@ static void update_status()
 
     read_battery();
     char bb[16];
-    if (UI_COMPACT_HEADER)
-        snprintf(bb, sizeof(bb), "%d%%", bat_pct);
-    else
-        snprintf(bb, sizeof(bb), LV_SYMBOL_BATTERY_FULL " %d%%", bat_pct);
-    lv_label_set_text(ui_lbl_bat, bb);
-    lv_obj_set_style_text_color(ui_lbl_bat,
-        lv_color_hex(bat_pct > 20 ? C_BAT_OK : C_BAT_LOW), 0);
+    if (bat_pct < 0) {
+        snprintf(bb, sizeof(bb), UI_COMPACT_HEADER ? "--" : LV_SYMBOL_BATTERY_FULL " --");
+        lv_label_set_text(ui_lbl_bat, bb);
+        lv_obj_set_style_text_color(ui_lbl_bat, lv_color_hex(C_GREY), 0);
+    } else {
+        if (UI_COMPACT_HEADER)
+            snprintf(bb, sizeof(bb), "%d%%", bat_pct);
+        else
+            snprintf(bb, sizeof(bb), LV_SYMBOL_BATTERY_FULL " %d%%", bat_pct);
+        lv_label_set_text(ui_lbl_bat, bb);
+        lv_obj_set_style_text_color(ui_lbl_bat,
+            lv_color_hex(bat_pct > 20 ? C_BAT_OK : C_BAT_LOW), 0);
+    }
 
     uint32_t s = millis()/1000;
     char tb[12];
@@ -5229,11 +5271,13 @@ static void sd_init()
 static void sensor_init()
 {
 #if defined(MM1_BOARD_P4)
-    /* IDF aborts if Wire (i2c_master) coexists with Display_Panel's legacy
-     * driver/i2c.h — even on a second port. IMU stays off until SH-2 talks
-     * through the legacy bus. */
-    imu_ok = false;
-    DBG_PRINT("[IMU] skipped (legacy/ng I2C conflict)\n");
+    /* BNO086 on GPIO30/31 (bitbang I2C). Not silk SDA/SCL, not 28/29 (stuck LOW). */
+    imu_ok = p4_imu_begin(IMU_ADDR);
+    if (!imu_ok)
+        p4_imu_scan(g_imu_scan_txt, sizeof(g_imu_scan_txt));
+    DBG_PRINT("[IMU] %s (I2C SDA=GPIO%d SCL=GPIO%d) scan=%s\n",
+              imu_ok ? "OK" : "FAIL", I2C_SDA, I2C_SCL,
+              imu_ok ? "ok" : g_imu_scan_txt);
 #else
     Wire.begin(I2C_SDA, I2C_SCL, 100000);
     delay(200);
@@ -5323,8 +5367,7 @@ void setup()
     audio_init_hw();
 #endif
     show_boot_splash_tft();
-    if (USER_BUTTON_PIN >= 0)
-        pinMode(USER_BUTTON_PIN, INPUT_PULLUP);
+    p4_btn_init();
     sd_init();
     sensor_init();
 #ifdef ARDUINO_ARCH_ESP32
@@ -5338,6 +5381,8 @@ void setup()
         while (1) delay(1000);
     }
     g_lv_disp = lv_disp_get_default();
+    /* Panel/LVGL can remap GPIOs — restore capture button after that. */
+    p4_btn_init();
 #else
     tft.init();
     tft.setRotation(TFT_ROTATION);
@@ -5512,16 +5557,31 @@ static void user_btn_cap_tick(unsigned long now)
 void loop()
 {
     unsigned long m = millis();
-    int x = digitalRead(USER_BUTTON_PIN);
+#if defined(MM1_BOARD_P4)
+    const int x = p4_btn_level();
+    const bool down = p4_btn_pressed();
+#else
+    const int x = digitalRead(USER_BUTTON_PIN);
+    const bool down = (x == LOW);
+#endif
     if (x != user_btn_last_raw) {
         user_btn_last_raw = x;
         user_btn_edge_ms = m;
+#if defined(MM1_BOARD_P4)
+        Serial.printf("[BTN] raw→%d pressed=%d @%lu\n", x, (int)down, m);
+#endif
     }
-    if ((m - user_btn_edge_ms) > 50UL && x != user_btn_stable) {
-        int prev = user_btn_stable;
-        user_btn_stable = x;
-        if (user_btn_stable == LOW && prev == HIGH)
-            user_btn_on_press();
+    if ((m - user_btn_edge_ms) > 50UL) {
+        static int s_stable_down = -1;
+        const int now_down = down ? 1 : 0;
+        if (s_stable_down < 0)
+            s_stable_down = now_down;
+        if (now_down != s_stable_down) {
+            s_stable_down = now_down;
+            user_btn_stable = x;
+            if (now_down)
+                user_btn_on_press();
+        }
     }
 
     user_btn_cap_tick(m);

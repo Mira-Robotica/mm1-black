@@ -43,13 +43,13 @@
 #define MM1_AMP_EN         53
 
 // ── MM1 on J3 (40-pin) ──────────────────────────────────────────────────────
-/* BNO086 on the silk SDA/SCL pads (shared bus GPIO7/8 with touch/codecs).
- * Address 0x4B — no clash with GT911 (0x5D), ES8311 (0x18), ES7210 (0x40).
- * Firmware still skips IMU until SH-2 talks over the legacy I2C driver
- * (Wire/i2c_master cannot coexist with Display_Panel). INT unused (poll only). */
+/* BNO086 on software I2C. Do not use silk SDA/SCL (GPIO7/8 = GT911).
+ * GPIO2/3 = JTAG. GPIO28/29 sit on J3 pins that idle LOW (pin 20 is GND on
+ * the Pi-style header). Use silk 30/31.
+ * VIN=3V3 GND=GND SDA=silk 30 SCL=silk 31. Addr 0x4B (or 0x4A). RST unused. */
 #define MM1_IMU_ADDR       0x4B
-#define MM1_IMU_SDA        MM1_I2C_SDA   /* silk SDA */
-#define MM1_IMU_SCL        MM1_I2C_SCL   /* silk SCL */
+#define MM1_IMU_SDA        30   /* silk "30" */
+#define MM1_IMU_SCL        31   /* silk "31" */
 #define MM1_IMU_INT        (-1)
 #define MM1_IMU_RST        (-1)
 
@@ -58,8 +58,8 @@
 #define MM1_LZR_TX         22   /* silk 22 — module RX → ESP TX */
 #define MM1_LZR_ENA        (-1)
 
-/* Capture button: silk GPIO5 sits next to GND — wire button to 5↔GND (active low).
- * Alternatives: GPIO2 / GPIO3 / GPIO4 (also free on J3). */
+/* 4-pin illuminated NO button: switch is NO+C only (+/− is the LED).
+ * C → GND, NO → silk 5 (GPIO5). Do not switch 3V3/5V into the GPIO. */
 #define MM1_USER_BUTTON    5
 
 #define MM1_BUZZER_PIN     (-1) /* chimes via ES8311; no spare piezo GPIO reserved */
