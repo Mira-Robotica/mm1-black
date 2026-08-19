@@ -37,6 +37,15 @@ constexpr uint8_t kEsAddr = 0x18;              /* Waveshare CE strapped low */
 
 I2SClass g_i2s;
 bool g_audio_ok = false;
+uint8_t g_vol_pct = 80;
+
+bool es_write(uint8_t reg, uint8_t val);
+void es_apply_volume(void)
+{
+    const uint8_t dac =
+        (g_vol_pct == 0) ? 0 : (uint8_t)(((unsigned)g_vol_pct * 255U + 50U) / 100U);
+    (void)es_write(0x32, dac);
+}
 
 void fill_rect(LCD *lcd, int x, int y, int w, int h, uint16_t colour)
 {
@@ -116,8 +125,9 @@ bool es8311_init_dac(void)
         return false;
     }
 
-    /* Volume ~80%, unmute */
-    if (!es_write(0x32, 0xBF) || !es_write(0x31, 0x00)) {
+    /* Volume from g_vol_pct, unmute */
+    es_apply_volume();
+    if (!es_write(0x31, 0x00)) {
         return false;
     }
     (void)kMclkHz;
@@ -189,12 +199,24 @@ void p4_boot_audio_init(void)
     }
 
     g_audio_ok = true;
+    es_apply_volume();
     Serial.println("p4_boot: ES8311 + I2S OK");
+}
+
+void p4_boot_set_volume(uint8_t pct)
+{
+    if (pct > 100) {
+        pct = 100;
+    }
+    g_vol_pct = pct;
+    if (g_audio_ok) {
+        es_apply_volume();
+    }
 }
 
 void p4_boot_buzzer_note(unsigned freq_hz, unsigned dur_ms)
 {
-    if (!g_audio_ok) {
+    if (!g_audio_ok || g_vol_pct == 0) {
         delay(dur_ms);
         return;
     }
@@ -220,7 +242,7 @@ void p4_boot_buzzer_note(unsigned freq_hz, unsigned dur_ms)
         for (size_t i = 0; i < n; i++) {
             int16_t s = 0;
             if (freq_hz != 0) {
-                s = static_cast<int16_t>(sinf(phase) * 12000.f);
+                s = static_cast<int16_t>(sinf(phase) * (12000.f * (float)g_vol_pct / 100.f));
                 phase += phase_inc;
                 if (phase > 2.f * static_cast<float>(M_PI)) {
                     phase -= 2.f * static_cast<float>(M_PI);

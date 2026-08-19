@@ -6,7 +6,8 @@
  *   docs/datasheets/ESP32-P4-WIFI6-Touch-LCD-4.3-schematic.pdf
  *
  * J3 40-pin silk labels are ESP32-P4 GPIO numbers (SDA/SCL = GPIO7/8).
- * GPIOs 16–20 are reserved for the ESP32-C6 SDIO link — not on J3.
+ * GPIOs 16–19 are reserved for the ESP32-C6 SDIO link — not on J3.
+ * GPIO20 is the on-board LiPo ADC (also C6 SDIO D2 if ESP-Hosted starts).
  */
 
 #pragma once
@@ -65,4 +66,9 @@
 #define MM1_BUZZER_PIN     (-1) /* chimes via ES8311; no spare piezo GPIO reserved */
 #define MM1_BUZZER_LEDC_CH 7
 
-#define MM1_BAT_ADC        (-1) /* LiPo sense not exposed on this carrier */
+/* BAT -- R12 200k -- GPIO20 -- R15 100k -- GND  (NLBAT0ADC). Vadc = Vbat/3.
+ * GPIO20 is also ESP32-C6 SDIO D2; safe while ESP-Hosted is not started. */
+#define MM1_BAT_ADC        20
+#ifndef MM1_BAT_DIVIDER
+#define MM1_BAT_DIVIDER    3.0f
+#endif

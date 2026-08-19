@@ -9,7 +9,7 @@
  *   S (Sample)    – measurement samples
  *   N (Navigation) – reference points for transforms
  *
- * Tabs: POINTS | SENSOR | FILES | SETUP (sub: Bright, Cal, BT, About)
+ * Tabs: POINTS | SENSOR | FILE | SETUP (sub: Bright, Cal, BT, About)
  *
  * BT BLE **SAP6** (CaveBLE GATT) for TopoDroid / SexyTopo / DiscoX-class apps.
  * Leg notify 17 B + ACK 0x55/0x56; queue + 5 s resend. CSV on SD + Wi‑Fi portal for file export.
@@ -172,12 +172,32 @@ extern const uint8_t mira_splash_map[];
 #define PREFS_NAMESPACE "mm1blk"
 #define PREFS_KEY_AZ_OFS "az_ofs"
 #define PREFS_KEY_BL_PCT "bl_pct"
+#define PREFS_KEY_VOL    "vol"
 #define PREFS_KEY_RANGE_MM "rng_mm"
 #define PREFS_KEY_PROJ_TOP "proj_top"
 #define PREFS_KEY_UI_DARK  "ui_dark"
+#define PREFS_KEY_SHOT     "shot"
+#define PREFS_KEY_NAV5     "nav5"
+
+enum ShotMode : uint8_t { SHOT_TWO = 0, SHOT_ONE = 1, SHOT_CONT = 2 };
+#ifndef NAV_HOLD_MS
+#define NAV_HOLD_MS 5000UL
+#endif
+#ifndef CONT_SHOT_GAP_MS
+#define CONT_SHOT_GAP_MS 750UL
+#endif
+
+#if defined(MM1_BOARD_P4)
+#define UI_TALL 1
+#else
+#define UI_TALL 0
+#endif
 /** Default TFT backlight (GPIO 27, LEDC PWM) before first NVS save. */
 #ifndef BL_DEFAULT_PCT
 #define BL_DEFAULT_PCT 85
+#endif
+#ifndef VOL_DEFAULT_PCT
+#define VOL_DEFAULT_PCT 80
 #endif
 #ifndef TFT_BL_LEDC_CH
 #define TFT_BL_LEDC_CH 6
@@ -287,56 +307,62 @@ static const uint16_t TOUCH_CAL[5] = { 254, 3643, 176, 3693, 7 };
 #endif
 
 // ── Colours ──────────────────────────────────────────────────────────────────
-#define C_BG        0xF0F4F8u
+#define C_BG        0xE6EDF5u
 #define C_TOPBAR    0xFFFFFFu
-#define C_TBL_HDR   0x1E3A5Fu
+#define C_TBL_HDR   0x0F2A4Au
 #define C_ROW_ODD   0xFFFFFFu
-#define C_ROW_EVEN  0xEEF2F7u
+#define C_ROW_EVEN  0xE8F0F7u
 #define C_ROW_SEL   0xBBDEFBu
-#define C_ROW_NAV   0xE0F2F1u   // light teal tint for NAV rows
-#define C_TEXT      0x1A2027u
-#define C_HDR_LINE  0x1565C0u
-#define C_BORDER    0xCFD8DCu
+#define C_ROW_NAV   0xD7F0ECu   // teal tint for NAV rows
+#define C_TEXT      0x12202Cu
+#define C_HDR_LINE  0x0B5CABu
+#define C_BORDER    0xB8C6D0u
 #define C_WHITE     0xFFFFFFu
 /** LVGL Montserrat has no em-dash / many Unicode glyphs — use ASCII only on labels. */
 #define UI_NA       "-"
-#define C_GREY      0x546E7Au
-#define C_BT_ON     0x1565C0u
+#define C_GREY      0x4A6270u
+#define C_BT_ON     0x0B5CABu
 #define C_BT_OFF    0x90A4AEu
 #define C_SD_ON     0x2E7D32u
-#define C_SD_OFF    0xD32F2Fu
-#define C_BTN_SAMP  0x00897Bu   // teal  – add sample
-#define C_BTN_NAV   0x4A148Cu   // purple – add nav
+#define C_SD_OFF    0xC62828u
+#define C_BTN_SAMP  0x00796Bu   // teal  – add sample
+#define C_BTN_NAV   0x4527A0u   // purple – add nav
 #define C_BTN_DEL   0xC62828u
-#define C_BTN_GPS   0x1565C0u
+#define C_BTN_GPS   0x0B5CABu
 #define C_BTN_SAVE  0x1B5E20u
-#define C_BTN_NEW   0x00897Bu
-#define C_BTN_USE   0x4A148Cu
-#define C_BTN_BT    0x1565C0u
+#define C_BTN_NEW   0x00796Bu
+#define C_BTN_USE   0x4527A0u
+#define C_BTN_BT    0x0B5CABu
 #define C_FILE_ACT  0xC8E6C9u
-#define C_REF_S     0x1565C0u
+#define C_REF_S     0x0B5CABu
 #define C_TYPE_S    0x00695Cu   // sample text
 #define C_TYPE_N    0x6A1B9Au   // nav text
 #define C_BAT_OK    0x2E7D32u
-#define C_BAT_LOW   0xD32F2Fu
+#define C_BAT_LOW   0xC62828u
 #define C_WARN      0xF9A825u   /* portal / SoftAP warning */
 #define C_CAP_AIM   0xF9A825u   /* button aim (BRIC5) */
 #define C_CAP_MEAS  0xE65100u   /* button capture in progress */
 #define C_HDR_BLINK_HI 0x42A5F5u /* table header blink (aim / measure) */
 #define C_HDR_OK_ON    0x2E7D32u
 #define C_HDR_OK_OFF   0x81C784u
-#define C_HDR_FAIL_ON  0xD32F2Fu
+#define C_HDR_FAIL_ON  0xC62828u
 #define C_HDR_FAIL_OFF 0xEF9A9Au
+#define C_SENS_LZR  0x00796Bu
+#define C_SENS_IMU  0x3F51B5u
+#define C_SENS_LNK  0x0B5CABu
+#define C_SENS_BTN  0xE65100u
+#define C_SENS_TMP  0x2E7D32u
+#define C_TRIM_MARK 0xFF6F00u
 
 static bool     g_ui_dark_mode = false;
 
 static inline uint32_t ucol_bg(void)
 {
-    return g_ui_dark_mode ? 0x121820u : C_BG;
+    return g_ui_dark_mode ? 0x0E141Cu : C_BG;
 }
 static inline uint32_t ucol_topbar(void)
 {
-    return g_ui_dark_mode ? 0x1E2836u : C_TOPBAR;
+    return g_ui_dark_mode ? 0x1A2430u : C_TOPBAR;
 }
 static inline uint32_t ucol_text(void)
 {
@@ -512,6 +538,19 @@ static lv_obj_t *ui_pts_action_bar = nullptr;
 static lv_obj_t *ui_lbl_bt       = nullptr;
 static lv_obj_t *ui_lbl_sd       = nullptr;
 static lv_obj_t *ui_lbl_bat      = nullptr;
+static lv_obj_t *ui_bat_box      = nullptr;
+static lv_obj_t *ui_sens_box[5]  = {};
+static lv_obj_t *ui_trim_box     = nullptr;
+static lv_obj_t *ui_trim_body    = nullptr;
+static lv_obj_t *ui_trim_mark    = nullptr;
+static lv_obj_t *ui_lbl_trim_mark = nullptr;
+static lv_obj_t *ui_trim_tag_top = nullptr;
+static lv_obj_t *ui_trim_tag_bot = nullptr;
+static lv_obj_t *ui_trim_laser   = nullptr;
+static lv_obj_t *ui_btn_shot_two = nullptr;
+static lv_obj_t *ui_btn_shot_one = nullptr;
+static lv_obj_t *ui_btn_shot_cont = nullptr;
+static lv_obj_t *ui_btn_nav_hold = nullptr;
 static lv_obj_t *ui_lbl_sens_temp = nullptr;
 static lv_obj_t *ui_lbl_time     = nullptr;
 static lv_obj_t *ui_hdr_bar      = nullptr;
@@ -558,6 +597,8 @@ static lv_obj_t *ui_lbl_setup_bt_peer   = nullptr;
 static lv_obj_t *ui_lbl_setup_bt_diag   = nullptr;
 static lv_obj_t *ui_lbl_setup_bl       = nullptr;
 static lv_obj_t *ui_slider_bl         = nullptr;
+static lv_obj_t *ui_lbl_setup_vol     = nullptr;
+static lv_obj_t *ui_slider_vol        = nullptr;
 static lv_obj_t *ui_lbl_setup_ver     = nullptr;
 static lv_obj_t *ui_qr_fw_update      = nullptr;
 static lv_obj_t *ui_lbl_setup_geom    = nullptr;
@@ -567,8 +608,10 @@ static lv_disp_t *g_lv_disp           = nullptr;
 static lv_obj_t *ui_btn_theme_light   = nullptr;
 static lv_obj_t *ui_btn_theme_dark    = nullptr;
 static uint8_t   g_backlight_pct      = BL_DEFAULT_PCT;
+static uint8_t   g_volume_pct         = VOL_DEFAULT_PCT;
 static bool        g_bl_pwm_attached  = false;
 static bool        g_bl_ui_sync       = false;
+static bool        g_vol_ui_sync      = false;
 /** Azimuth offset added after atan2; NVS persists on ESP32 (SETUP tab). Loaded at boot. */
 static float       g_azimuth_offset_deg = AZIMUTH_OFFSET_DEG;
 static bool        g_mm1_proj_top        = false;
@@ -577,6 +620,14 @@ static float       g_mm1_range_offset_mm = 0.f;
 /* Capture button (physical) — shared with SENSOR status + debounce path below. */
 static bool          user_btn_cap_armed = false;
 static uint32_t      g_btn_tap_count    = 0;
+static uint8_t       g_shot_mode        = SHOT_TWO;
+static bool          g_nav_hold_en      = false;
+static bool          g_cont_active      = false;
+static unsigned long g_cont_last_ms     = 0;
+static unsigned long g_btn_down_ms      = 0;
+static bool          g_btn_held         = false;
+static bool          g_nav_hold_fired   = false;
+static bool          g_ignore_btn_up    = false;
 #if defined(MM1_BOARD_P4)
 static char          g_imu_scan_txt[48] = "—";
 #endif
@@ -608,15 +659,26 @@ static void prefs_load_az_offset();
 static void prefs_load_geometry(void);
 static void prefs_load_ui_theme(void);
 static void prefs_save_ui_theme(void);
+static void prefs_load_shot(void);
+static void prefs_save_shot(void);
+static void refresh_shot_mode_buttons(void);
+static void refresh_trim_diagram(void);
+static void add_nav_triple(void);
+static void shot_cont_stop(const char *msg);
+static bool shot_differs_from_last(void);
 static void ui_apply_theme_colors(void);
 static void refresh_theme_buttons(void);
 static void refresh_setup_geom_label(void);
 static void refresh_geom_proj_buttons(void);
 static void prefs_load_backlight(void);
 static void prefs_save_backlight(void);
+static void prefs_load_volume(void);
+static void prefs_save_volume(void);
 static void tft_bl_init(void);
 static void tft_bl_apply(uint8_t pct);
+static void audio_apply_volume(uint8_t pct);
 static void refresh_setup_bl_label(void);
+static void refresh_setup_vol_label(void);
 static void refresh_table();
 static void refresh_sensor_display();
 static void refresh_setup_bt_status();
@@ -750,7 +812,7 @@ static void buzzer_note(unsigned freq_hz, unsigned dur_ms)
 #if defined(MM1_BOARD_P4)
     p4_boot_buzzer_note(freq_hz, dur_ms);
 #else
-    if (freq_hz == 0) {
+    if (freq_hz == 0 || g_volume_pct == 0) {
         delay(dur_ms);
         return;
     }
@@ -1555,16 +1617,64 @@ static void lzr_aim_laser_keepalive_tick(unsigned long now)
     lzr_on();
 }
 
+static void bat_adc_init(void)
+{
+#if defined(ARDUINO_ARCH_ESP32)
+    if (BAT_ADC_PIN < 0)
+        return;
+    analogSetPinAttenuation(BAT_ADC_PIN, ADC_11db);
+#endif
+}
+
 static void read_battery()
 {
     if (BAT_ADC_PIN < 0) {
         bat_pct = -1;
         return;
     }
-    int raw = analogRead(BAT_ADC_PIN);
-    // 12-bit ADC, 3.3V ref, typical voltage divider: adjust as needed
-    float v = raw * 3.3f / 4095.0f * 2.0f;   // ×2 for divider
+#ifdef ARDUINO_ARCH_ESP32
+    analogRead(BAT_ADC_PIN); /* prime oneshot + attenuation */
+    int acc_raw = 0;
+    int acc_mv  = 0;
+    for (int i = 0; i < 8; i++) {
+        acc_raw += analogRead(BAT_ADC_PIN);
+        acc_mv  += (int)analogReadMilliVolts(BAT_ADC_PIN);
+    }
+    const int raw    = acc_raw / 8;
+    const int pin_mv = acc_mv / 8;
+#if defined(MM1_BOARD_P4)
+    const float div = MM1_BAT_DIVIDER;
+    /* P4 eFuse ADC cali is often missing — use 11 dB raw scale (~3.1 V FS). */
+    float vpin = (raw / 4095.0f) * 3.10f;
+    (void)pin_mv;
+#else
+    const float div = 2.0f;
+    float vpin = pin_mv / 1000.0f;
+    if (vpin < 0.05f)
+        vpin = (raw / 4095.0f) * 3.3f;
+#endif
+    if (raw < 80 && pin_mv < 180) {
+        bat_pct = -1;
+        return;
+    }
+    const float v = vpin * div;
+#if !LZR_SHARE_USB_UART
+    static bool bat_logged;
+    if (!bat_logged) {
+        bat_logged = true;
+        DBG_PRINT("[BAT] raw=%d  pin=%d mV  Vbat=%.2f\n", raw, pin_mv, (double)v);
+    }
+#endif
+    if (v < 2.6f || v > 4.6f) {
+        bat_pct = -1;
+        return;
+    }
     bat_pct = constrain((int)((v - 3.0f) / (4.2f - 3.0f) * 100.0f), 0, 100);
+#else
+    int raw = analogRead(BAT_ADC_PIN);
+    float v = raw * 3.3f / 4095.0f * 2.0f;
+    bat_pct = constrain((int)((v - 3.0f) / (4.2f - 3.0f) * 100.0f), 0, 100);
+#endif
 }
 
 static void read_device_temp_c(void)
@@ -1840,31 +1950,35 @@ static void refresh_sensor_display()
     char buf[128];
     if (ui_lbl_tof_val) {
         if (tof_ok) {
-            snprintf(buf, sizeof(buf), "%.3f m  (%lu mm)",
+            snprintf(buf, sizeof(buf), "%.3f m\n%lu mm",
                      tof_dist_mm / 1000.0f, (unsigned long)tof_dist_mm);
         } else {
-            snprintf(buf, sizeof(buf), "No reading");
+            snprintf(buf, sizeof(buf), "no reading");
         }
         lv_label_set_text(ui_lbl_tof_val, buf);
     }
     if (ui_lbl_imu_val) {
         if (!imu_ok) {
 #if defined(MM1_BOARD_P4)
-            snprintf(buf, sizeof(buf), "offline  scan:%s", g_imu_scan_txt);
+            snprintf(buf, sizeof(buf), "offline\n%s", g_imu_scan_txt);
             lv_label_set_text(ui_lbl_imu_val, buf);
 #else
             lv_label_set_text(ui_lbl_imu_val, "offline");
 #endif
         } else {
-            snprintf(buf, sizeof(buf), "Az: %.1f\xC2\xB0   Inc: %.1f\xC2\xB0   Roll: %.1f\xC2\xB0",
+            snprintf(buf, sizeof(buf),
+                     UI_TALL ? "Az   %.1f\nInc  %.1f\nRoll %.1f"
+                             : "Az  %.1f\nInc %.1f   Roll %.1f",
                      imu_azimuth_deg, imu_inclination_deg, imu_roll);
             lv_label_set_text(ui_lbl_imu_val, buf);
         }
     }
     if (ui_lbl_sens_stat) {
-        snprintf(buf, sizeof(buf), "LASER: %s  rx=%lu   IMU: %s",
-                 tof_ok ? "OK" : "FAIL", (unsigned long)lzr_rx_bytes_total,
-                 imu_ok ? "OK" : "FAIL");
+        snprintf(buf, sizeof(buf),
+                 UI_TALL ? "laser %s\nimu %s\nrx %lu"
+                         : "laser %s   imu %s\nrx %lu",
+                 tof_ok ? "OK" : "FAIL", imu_ok ? "OK" : "FAIL",
+                 (unsigned long)lzr_rx_bytes_total);
         lv_label_set_text(ui_lbl_sens_stat, buf);
     }
     if (ui_lbl_sens_btn) {
@@ -1881,25 +1995,31 @@ static void refresh_sensor_display()
 #endif
             const char *st;
             uint32_t col;
-            if (user_btn_cap_armed) {
-                st = "AIM (1st tap — laser on)";
+            if (g_cont_active) {
+                st = "CONT running";
+                col = C_CAP_MEAS;
+            } else if (user_btn_cap_armed) {
+                st = "AIM — tap again";
                 col = C_CAP_AIM;
             } else if (down) {
-                st = "DOWN (pressed)";
+                st = "pressed";
                 col = C_HDR_OK_ON;
             } else {
-                st = "UP (released)";
+                st = (g_shot_mode == SHOT_ONE) ? "1-tap ready"
+                     : (g_shot_mode == SHOT_CONT) ? "cont idle" : "2-tap ready";
                 col = ucol_text();
             }
-            snprintf(buf, sizeof(buf), "NO/C GPIO%d raw=%d %s taps:%lu",
-                     USER_BUTTON_PIN, raw, st, (unsigned long)g_btn_tap_count);
+            (void)raw;
+            snprintf(buf, sizeof(buf), "%s\ntaps %lu", st, (unsigned long)g_btn_tap_count);
             lv_label_set_text(ui_lbl_sens_btn, buf);
             lv_obj_set_style_text_color(ui_lbl_sens_btn, lv_color_hex(col), 0);
         }
     }
     if (ui_lbl_sens_temp) {
         if (isfinite(g_live_temp_c))
-            snprintf(buf, sizeof(buf), "%.1f C  (ESP32 MCU)", (double)g_live_temp_c);
+            snprintf(buf, sizeof(buf),
+                     UI_TALL ? "%.1f C\nESP32 MCU" : "%.1f C  (ESP32 MCU)",
+                     (double)g_live_temp_c);
         else
             strlcpy(buf, UI_NA, sizeof(buf));
         lv_label_set_text(ui_lbl_sens_temp, buf);
@@ -3348,6 +3468,47 @@ static void add_point(PtType type, bool sync_laser_before)
     set_fstatus(buf);
 }
 
+static bool shot_differs_from_last(void)
+{
+    if (pt_count <= 0)
+        return true;
+    const MeasPoint &l = pts[pt_count - 1];
+    const float d = mm1_distance_at_ref_m(tof_dist_mm / 1000.0f,
+                                          g_mm1_proj_top ? 1 : 0, g_mm1_range_offset_mm);
+    if (!tof_ok || !l.laser_ok)
+        return true;
+    if (fabsf(d - l.dist) > 0.025f)
+        return true;
+    if (fabsf(imu_azimuth_deg - l.yaw) > 1.2f)
+        return true;
+    if (fabsf(imu_inclination_deg - l.pitch) > 1.2f)
+        return true;
+    return false;
+}
+
+static void add_nav_triple(void)
+{
+    if (!lzr_measure_once_blocking()) {
+        play_error_sound();
+        cap_ui_result_pulse(false);
+        set_fstatus(LV_SYMBOL_WARNING " Nav: no laser");
+        return;
+    }
+    play_capture_sound();
+    for (int i = 0; i < 3; i++)
+        add_point(PT_NAV, false);
+    set_fstatus(LV_SYMBOL_OK " Nav x3 (same shot)");
+}
+
+static void shot_cont_stop(const char *msg)
+{
+    g_cont_active = false;
+    lzr_shutdown_beam();
+    cap_ui_set_state(CAP_UI_IDLE);
+    if (msg)
+        set_fstatus(msg);
+}
+
 static void btn_del_cb(lv_event_t *e)
 {
     if (sel_row < 0 || sel_row >= pt_count) {
@@ -3647,10 +3808,10 @@ static void main_tab_strip_install(lv_obj_t *scr, lv_obj_t *tv, int y, int h)
 
     const int tw = SCREEN_W / 4;
     const char *names[4] = {
-        UI_COMPACT_HEADER ? LV_SYMBOL_LIST : LV_SYMBOL_LIST " PTS",
-        UI_COMPACT_HEADER ? LV_SYMBOL_EYE_OPEN : LV_SYMBOL_EYE_OPEN " SNS",
-        UI_COMPACT_HEADER ? LV_SYMBOL_FILE : LV_SYMBOL_FILE " FIL",
-        UI_COMPACT_HEADER ? LV_SYMBOL_SETTINGS : LV_SYMBOL_SETTINGS " SET",
+        UI_COMPACT_HEADER ? LV_SYMBOL_LIST : "POINTS",
+        UI_COMPACT_HEADER ? LV_SYMBOL_EYE_OPEN : "SENSOR",
+        UI_COMPACT_HEADER ? LV_SYMBOL_FILE : "FILE",
+        UI_COMPACT_HEADER ? LV_SYMBOL_SETTINGS : "SETUP",
     };
     for (int i = 0; i < 4; i++) {
         lv_obj_t *b = lv_btn_create(scr);
@@ -3667,7 +3828,7 @@ static void main_tab_strip_install(lv_obj_t *scr, lv_obj_t *tv, int y, int h)
         lv_obj_add_event_cb(b, main_tab_hit_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
         lv_obj_t *lb = lv_label_create(b);
         lv_label_set_text(lb, names[i]);
-        lv_obj_set_style_text_font(lb, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(lb, UI_TALL ? &lv_font_montserrat_14 : &lv_font_montserrat_12, 0);
         lv_obj_set_style_text_color(lb, lv_color_hex(ucol_grey()), 0);
         lv_obj_center(lb);
         lv_obj_move_foreground(b);
@@ -3717,11 +3878,11 @@ static void update_status()
         const char *bt_txt;
         uint32_t    bt_col;
         if (bt_conn) {
-            bt_txt = UI_COMPACT_HEADER ? LV_SYMBOL_BLUETOOTH
+            bt_txt = (UI_COMPACT_HEADER || UI_TALL) ? LV_SYMBOL_BLUETOOTH
                                        : LV_SYMBOL_BLUETOOTH " LINK";
             bt_col = C_SD_ON;
         } else if (g_bt_paired) {
-            bt_txt = UI_COMPACT_HEADER ? LV_SYMBOL_BLUETOOTH
+            bt_txt = (UI_COMPACT_HEADER || UI_TALL) ? LV_SYMBOL_BLUETOOTH
                                        : LV_SYMBOL_BLUETOOTH " KEY";
             bt_col = C_BT_ON;
         } else {
@@ -3737,24 +3898,26 @@ static void update_status()
     lv_obj_set_style_text_color(ui_lbl_bt, lv_color_hex(C_BT_OFF), 0);
 #endif
     lv_label_set_text(ui_lbl_sd,
-        sd_ready ? (UI_COMPACT_HEADER ? LV_SYMBOL_SD_CARD : LV_SYMBOL_SD_CARD " SD")
+        sd_ready ? ((UI_COMPACT_HEADER || UI_TALL) ? LV_SYMBOL_SD_CARD : LV_SYMBOL_SD_CARD " SD")
                  : LV_SYMBOL_SD_CARD);
     lv_obj_set_style_text_color(ui_lbl_sd, lv_color_hex(sd_ready?C_SD_ON:C_SD_OFF), 0);
 
     read_battery();
     char bb[16];
     if (bat_pct < 0) {
-        snprintf(bb, sizeof(bb), UI_COMPACT_HEADER ? "--" : LV_SYMBOL_BATTERY_FULL " --");
+        snprintf(bb, sizeof(bb), LV_SYMBOL_BATTERY_EMPTY);
         lv_label_set_text(ui_lbl_bat, bb);
         lv_obj_set_style_text_color(ui_lbl_bat, lv_color_hex(C_GREY), 0);
+        if (ui_bat_box)
+            lv_obj_set_style_bg_color(ui_bat_box, lv_color_hex(g_ui_dark_mode ? 0x1E2836u : 0xE8EEF4u), 0);
     } else {
-        if (UI_COMPACT_HEADER)
-            snprintf(bb, sizeof(bb), "%d%%", bat_pct);
-        else
-            snprintf(bb, sizeof(bb), LV_SYMBOL_BATTERY_FULL " %d%%", bat_pct);
+        snprintf(bb, sizeof(bb), "%d%%", bat_pct);
         lv_label_set_text(ui_lbl_bat, bb);
-        lv_obj_set_style_text_color(ui_lbl_bat,
-            lv_color_hex(bat_pct > 20 ? C_BAT_OK : C_BAT_LOW), 0);
+        const bool low = bat_pct <= 20;
+        lv_obj_set_style_text_color(ui_lbl_bat, lv_color_hex(low ? C_BAT_LOW : C_BAT_OK), 0);
+        if (ui_bat_box)
+            lv_obj_set_style_bg_color(ui_bat_box,
+                lv_color_hex(low ? 0xFFEBEEu : 0xE8F5E9u), 0);
     }
 
     uint32_t s = millis()/1000;
@@ -4023,6 +4186,76 @@ static void prefs_load_backlight(void)
 #endif
 }
 
+static void prefs_save_volume(void)
+{
+#ifdef ARDUINO_ARCH_ESP32
+    Preferences p;
+    if (p.begin(PREFS_NAMESPACE, false)) {
+        p.putUChar(PREFS_KEY_VOL, g_volume_pct);
+        p.end();
+    }
+#endif
+}
+
+static void prefs_load_volume(void)
+{
+    g_volume_pct = VOL_DEFAULT_PCT;
+#ifdef ARDUINO_ARCH_ESP32
+    Preferences p;
+    if (p.begin(PREFS_NAMESPACE, true)) {
+        const uint8_t v = p.getUChar(PREFS_KEY_VOL, VOL_DEFAULT_PCT);
+        p.end();
+        if (v <= 100)
+            g_volume_pct = v;
+    }
+#endif
+}
+
+static void refresh_setup_vol_label(void)
+{
+    if (!ui_lbl_setup_vol)
+        return;
+    char b[32];
+    if (g_volume_pct == 0)
+        snprintf(b, sizeof(b), "Mute");
+    else
+        snprintf(b, sizeof(b), "%u%%", (unsigned)g_volume_pct);
+    lv_label_set_text(ui_lbl_setup_vol, b);
+}
+
+static void audio_apply_volume(uint8_t pct)
+{
+    if (pct > 100)
+        pct = 100;
+    g_volume_pct = pct;
+#if defined(MM1_BOARD_P4)
+    p4_boot_set_volume(pct);
+#endif
+    if (ui_slider_vol) {
+        g_vol_ui_sync = true;
+        lv_slider_set_value(ui_slider_vol, pct, LV_ANIM_OFF);
+        g_vol_ui_sync = false;
+    }
+    refresh_setup_vol_label();
+}
+
+static void setup_vol_slider_cb(lv_event_t *e)
+{
+    if (g_vol_ui_sync)
+        return;
+    const lv_event_code_t code = lv_event_get_code(e);
+    if (code != LV_EVENT_VALUE_CHANGED && code != LV_EVENT_RELEASED)
+        return;
+    const int v = (int)lv_slider_get_value(lv_event_get_target(e));
+    audio_apply_volume((uint8_t)v);
+    if (code == LV_EVENT_RELEASED) {
+        prefs_save_volume();
+#ifdef ARDUINO_ARCH_ESP32
+        play_button_ack();
+#endif
+    }
+}
+
 static void tft_bl_init(void)
 {
 #if defined(MM1_BOARD_P4)
@@ -4220,6 +4453,86 @@ static void prefs_save_ui_theme(void)
 #endif
 }
 
+static void prefs_load_shot(void)
+{
+    g_shot_mode   = SHOT_TWO;
+    g_nav_hold_en = false;
+#ifdef ARDUINO_ARCH_ESP32
+    Preferences p;
+    if (p.begin(PREFS_NAMESPACE, true)) {
+        const uint8_t m = p.getUChar(PREFS_KEY_SHOT, SHOT_TWO);
+        g_shot_mode   = (m <= SHOT_CONT) ? m : SHOT_TWO;
+        g_nav_hold_en = p.getBool(PREFS_KEY_NAV5, false);
+        p.end();
+    }
+#endif
+}
+
+static void prefs_save_shot(void)
+{
+#ifdef ARDUINO_ARCH_ESP32
+    Preferences p;
+    if (p.begin(PREFS_NAMESPACE, false)) {
+        p.putUChar(PREFS_KEY_SHOT, g_shot_mode);
+        p.putBool(PREFS_KEY_NAV5, g_nav_hold_en);
+        p.end();
+    }
+#endif
+}
+
+static void refresh_shot_mode_buttons(void)
+{
+    if (ui_btn_shot_two)
+        lv_obj_set_style_bg_color(ui_btn_shot_two,
+            lv_color_hex(g_shot_mode == SHOT_TWO ? C_HDR_LINE : C_GREY), 0);
+    if (ui_btn_shot_one)
+        lv_obj_set_style_bg_color(ui_btn_shot_one,
+            lv_color_hex(g_shot_mode == SHOT_ONE ? C_HDR_LINE : C_GREY), 0);
+    if (ui_btn_shot_cont)
+        lv_obj_set_style_bg_color(ui_btn_shot_cont,
+            lv_color_hex(g_shot_mode == SHOT_CONT ? C_HDR_LINE : C_GREY), 0);
+    if (ui_btn_nav_hold) {
+        lv_obj_set_style_bg_color(ui_btn_nav_hold,
+            lv_color_hex(g_nav_hold_en ? C_BTN_NAV : C_GREY), 0);
+        lv_obj_t *lb = lv_obj_get_child(ui_btn_nav_hold, 0);
+        if (lb)
+            lv_label_set_text(lb, g_nav_hold_en ? "Hold 5s nav ON" : "Hold 5s nav OFF");
+    }
+}
+
+static void setup_shot_mode_cb(lv_event_t *e)
+{
+    const int m = (int)(intptr_t)lv_event_get_user_data(e);
+    if (m < SHOT_TWO || m > SHOT_CONT)
+        return;
+    if (g_shot_mode == SHOT_CONT && m != SHOT_CONT)
+        shot_cont_stop("Continuous off");
+    g_shot_mode = (uint8_t)m;
+    prefs_save_shot();
+    refresh_shot_mode_buttons();
+    if (m == SHOT_TWO)
+        setup_tab_cal_ack("Shot: 2-tap (aim + capture)");
+    else if (m == SHOT_ONE)
+        setup_tab_cal_ack("Shot: 1-tap capture");
+    else
+        setup_tab_cal_ack("Shot: continuous (tap to start/stop)");
+#ifdef ARDUINO_ARCH_ESP32
+    play_button_ack();
+#endif
+}
+
+static void setup_nav_hold_cb(lv_event_t *e)
+{
+    (void)e;
+    g_nav_hold_en = !g_nav_hold_en;
+    prefs_save_shot();
+    refresh_shot_mode_buttons();
+    setup_tab_cal_ack(g_nav_hold_en ? "Hold 5s = nav x3" : "Hold-nav off");
+#ifdef ARDUINO_ARCH_ESP32
+    play_button_ack();
+#endif
+}
+
 static void refresh_theme_buttons(void)
 {
     if (!ui_btn_theme_light || !ui_btn_theme_dark)
@@ -4273,6 +4586,7 @@ static void ui_apply_theme_colors(void)
     lbl_tx(ui_lbl_sens_temp);
     lbl_tx(ui_lbl_setup_ver);
     lbl_tx(ui_lbl_setup_bl);
+    lbl_tx(ui_lbl_setup_vol);
     lbl_tx(ui_lbl_setup_az_offs);
     lbl_tx(ui_lbl_setup_imu_head);
     lbl_gr(ui_lbl_setup_geom);
@@ -4329,7 +4643,22 @@ static void ui_apply_theme_colors(void)
     }
 
     refresh_theme_buttons();
+    refresh_shot_mode_buttons();
+    refresh_trim_diagram();
     refresh_setup_cal_display();
+    static const uint32_t k_sens_accent[5] = {
+        C_SENS_LZR, C_SENS_IMU, C_SENS_LNK, C_SENS_BTN, C_SENS_TMP
+    };
+    for (int i = 0; i < 5; i++) {
+        if (ui_sens_box[i]) {
+            lv_obj_set_style_bg_color(ui_sens_box[i], lv_color_hex(tb), 0);
+            lv_obj_set_style_border_color(ui_sens_box[i], lv_color_hex(k_sens_accent[i]), 0);
+        }
+    }
+    if (ui_trim_box) {
+        lv_obj_set_style_bg_color(ui_trim_box, lv_color_hex(tb), 0);
+        lv_obj_set_style_border_color(ui_trim_box, lv_color_hex(ucol_border()), 0);
+    }
     main_tab_strip_style((int)ui_active_tab);
     setup_sub_tab_strip_style((int)g_setup_sub_idx);
 }
@@ -4381,6 +4710,42 @@ static void refresh_setup_geom_label(void)
              top ? "Top" : "Bottom", (double)ld, (double)ix,
              (double)g_mm1_range_offset_mm);
     lv_label_set_text(ui_lbl_setup_geom, b);
+    refresh_trim_diagram();
+}
+
+static void refresh_trim_diagram(void)
+{
+    if (!ui_trim_box)
+        return;
+    const bool top = g_mm1_proj_top;
+    const uint32_t on  = C_HDR_LINE;
+    const uint32_t off = C_GREY;
+    if (ui_trim_tag_top)
+        lv_obj_set_style_bg_color(ui_trim_tag_top, lv_color_hex(top ? on : off), 0);
+    if (ui_trim_tag_bot)
+        lv_obj_set_style_bg_color(ui_trim_tag_bot, lv_color_hex(top ? off : on), 0);
+    if (ui_trim_laser)
+        lv_obj_set_style_bg_color(ui_trim_laser, lv_color_hex(top ? on : 0xE65100u), 0);
+    if (ui_trim_body)
+        lv_obj_set_style_border_color(ui_trim_body, lv_color_hex(on), 0);
+
+    if (ui_trim_mark) {
+        float t = g_mm1_range_offset_mm / MM1_TRIM_LIMIT_MM;
+        if (t < -1.f)
+            t = -1.f;
+        if (t > 1.f)
+            t = 1.f;
+        const int travel = (SCREEN_W - 80) / 2 - 14;
+        const int xoff = (int)(t * (float)travel);
+        lv_obj_align(ui_trim_mark, LV_ALIGN_CENTER, xoff, 4);
+        lv_obj_set_style_bg_color(ui_trim_mark, lv_color_hex(C_TRIM_MARK), 0);
+        lv_obj_move_foreground(ui_trim_mark);
+    }
+    if (ui_lbl_trim_mark) {
+        char mb[20];
+        snprintf(mb, sizeof(mb), "%+0.0f mm", (double)g_mm1_range_offset_mm);
+        lv_label_set_text(ui_lbl_trim_mark, mb);
+    }
 }
 
 static void geom_set_proj_mode(bool top)
@@ -4652,10 +5017,10 @@ static void build_ui()
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    // ── Header (36px) ────────────────────────────────────────────────────
+    const int HDR_H = UI_TALL ? 50 : 36;
     lv_obj_t *hdr = lv_obj_create(scr);
     ui_hdr_bar = hdr;
-    lv_obj_set_size(hdr, SCREEN_W, 36);
+    lv_obj_set_size(hdr, SCREEN_W, HDR_H);
     lv_obj_set_pos(hdr, 0, 0);
     lv_obj_set_style_bg_color(hdr, lv_color_hex(C_TOPBAR), 0);
     lv_obj_set_style_bg_opa(hdr, LV_OPA_COVER, 0);
@@ -4678,7 +5043,7 @@ static void build_ui()
         lv_obj_set_style_bg_opa(s, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(s, 0, 0);
         lv_obj_set_style_pad_all(s, 0, 0);
-        lv_obj_set_style_pad_column(s, UI_COMPACT_HEADER ? 4 : 8, 0);
+        lv_obj_set_style_pad_column(s, UI_TALL ? 12 : (UI_COMPACT_HEADER ? 4 : 8), 0);
         lv_obj_set_layout(s, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(s, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(s, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
@@ -4693,39 +5058,46 @@ static void build_ui()
     lv_obj_t *lt = lv_label_create(hdr_left);
     lv_label_set_text(lt, "MM1-BLACK");
     lv_obj_set_style_text_color(lt, lv_color_hex(C_HDR_LINE), 0);
-    lv_obj_set_style_text_font(lt, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(lt, UI_TALL ? &lv_font_montserrat_14 : &lv_font_montserrat_12, 0);
 
     lv_obj_t *hdr_right = hdr_mk_strip(hdr);
     lv_obj_set_flex_grow(hdr_right, 0);
     lv_obj_set_flex_align(hdr_right, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
 
-    ui_lbl_bat = lv_label_create(hdr_right);
-    lv_label_set_text(ui_lbl_bat, "100%");
-    lv_obj_set_style_text_color(ui_lbl_bat, lv_color_hex(C_BAT_OK), 0);
-    lv_obj_set_style_text_font(ui_lbl_bat, &lv_font_montserrat_12, 0);
+    ui_bat_box = lv_obj_create(hdr_right);
+    lv_obj_set_size(ui_bat_box, UI_TALL ? 72 : 52, UI_TALL ? 30 : 22);
+    lv_obj_set_style_radius(ui_bat_box, 8, 0);
+    lv_obj_set_style_bg_color(ui_bat_box, lv_color_hex(0xE8F5E9u), 0);
+    lv_obj_set_style_border_width(ui_bat_box, 0, 0);
+    lv_obj_set_style_pad_all(ui_bat_box, 0, 0);
+    lv_obj_clear_flag(ui_bat_box, LV_OBJ_FLAG_SCROLLABLE);
+    ui_lbl_bat = lv_label_create(ui_bat_box);
+    lv_label_set_text(ui_lbl_bat, LV_SYMBOL_BATTERY_EMPTY);
+    lv_obj_set_style_text_color(ui_lbl_bat, lv_color_hex(C_HDR_LINE), 0);
+    lv_obj_set_style_text_font(ui_lbl_bat, UI_TALL ? &lv_font_montserrat_14 : &lv_font_montserrat_12, 0);
+    lv_obj_center(ui_lbl_bat);
 
     ui_lbl_sd = lv_label_create(hdr_right);
     lv_label_set_text(ui_lbl_sd, LV_SYMBOL_SD_CARD);
-    lv_obj_set_style_text_font(ui_lbl_sd, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(ui_lbl_sd, UI_TALL ? &lv_font_montserrat_14 : &lv_font_montserrat_12, 0);
 
     ui_lbl_bt = lv_label_create(hdr_right);
     lv_label_set_text(ui_lbl_bt, LV_SYMBOL_BLUETOOTH);
-    lv_obj_set_style_text_font(ui_lbl_bt, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(ui_lbl_bt, UI_TALL ? &lv_font_montserrat_14 : &lv_font_montserrat_12, 0);
 
     ui_lbl_time = lv_label_create(hdr_right);
     lv_label_set_text(ui_lbl_time, "00:00");
     lv_obj_set_style_text_color(ui_lbl_time, lv_color_hex(C_TEXT), 0);
-    lv_obj_set_style_text_font(ui_lbl_time, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(ui_lbl_time, UI_TALL ? &lv_font_montserrat_14 : &lv_font_montserrat_12, 0);
 
     // ── Tabs (overlay bar on scr) ────────────────────────────────────────
-    const int HDR_H      = 36;
-    const int MAIN_BAR_H = 32;
+    const int MAIN_BAR_H = UI_TALL ? 44 : 32;
     const int TAB_Y      = HDR_H;
     const int TV_Y       = TAB_Y + MAIN_BAR_H;
     const int TV_H       = SCREEN_H - TV_Y;
     const int CONTENT_H  = TV_H;
-    const int ACTION_H   = 40;
+    const int ACTION_H   = UI_TALL ? 58 : 40;
 
     lv_obj_t *tv = lv_tabview_create(scr, LV_DIR_TOP, 0);
     lv_obj_set_size(tv, SCREEN_W, TV_H);
@@ -4738,10 +5110,10 @@ static void build_ui()
 
     auto make_btn = [&](lv_obj_t *par, uint32_t col, const char *txt, lv_event_cb_t cb) {
         lv_obj_t *btn = lv_btn_create(par);
-        lv_obj_set_size(btn, 72, 32);
+        lv_obj_set_size(btn, UI_TALL ? 108 : 72, UI_TALL ? 48 : 32);
         lv_obj_set_style_bg_color(btn, lv_color_hex(col), 0);
         lv_obj_set_style_bg_color(btn, lv_color_darken(lv_color_hex(col),LV_OPA_20), LV_STATE_PRESSED);
-        lv_obj_set_style_radius(btn, 6, 0);
+        lv_obj_set_style_radius(btn, UI_TALL ? 10 : 6, 0);
         lv_obj_set_style_shadow_width(btn, 3, 0);
         lv_obj_set_style_shadow_opa(btn, LV_OPA_30, 0);
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, nullptr);
@@ -4771,7 +5143,7 @@ static void build_ui()
 
     // ── POINTS tab ───────────────────────────────────────────────────────
     lv_obj_t *tp = lv_tabview_add_tab(tv,
-        UI_COMPACT_HEADER ? LV_SYMBOL_LIST : LV_SYMBOL_LIST " PTS");
+        UI_COMPACT_HEADER ? LV_SYMBOL_LIST : "POINTS");
     lv_obj_set_style_bg_color(tp, lv_color_hex(C_BG), 0);
     lv_obj_set_style_pad_all(tp, 0, 0);
     lv_obj_set_layout(tp, LV_LAYOUT_FLEX);
@@ -4807,7 +5179,7 @@ static void build_ui()
 
     ui_pts_pager = lv_obj_create(tp);
     lv_obj_set_width(ui_pts_pager, LV_PCT(100));
-    lv_obj_set_height(ui_pts_pager, 30);
+    lv_obj_set_height(ui_pts_pager, UI_TALL ? 40 : 30);
     lv_obj_set_style_bg_color(ui_pts_pager, lv_color_hex(ucol_bg()), 0);
     lv_obj_set_style_bg_opa(ui_pts_pager, LV_OPA_COVER, 0);
     lv_obj_set_style_border_side(ui_pts_pager, LV_BORDER_SIDE_BOTTOM, 0);
@@ -4822,7 +5194,7 @@ static void build_ui()
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
     ui_btn_pts_prev = lv_btn_create(ui_pts_pager);
-    lv_obj_set_size(ui_btn_pts_prev, 40, 26);
+    lv_obj_set_size(ui_btn_pts_prev, UI_TALL ? 52 : 40, UI_TALL ? 34 : 26);
     lv_obj_set_style_bg_color(ui_btn_pts_prev, lv_color_hex(C_HDR_LINE), 0);
     lv_obj_set_style_radius(ui_btn_pts_prev, 6, 0);
     lv_obj_add_event_cb(ui_btn_pts_prev, btn_pts_prev_cb, LV_EVENT_CLICKED, nullptr);
@@ -4839,7 +5211,7 @@ static void build_ui()
     lv_obj_set_style_text_align(ui_lbl_pts_page, LV_TEXT_ALIGN_CENTER, 0);
 
     ui_btn_pts_next = lv_btn_create(ui_pts_pager);
-    lv_obj_set_size(ui_btn_pts_next, 40, 26);
+    lv_obj_set_size(ui_btn_pts_next, UI_TALL ? 52 : 40, UI_TALL ? 34 : 26);
     lv_obj_set_style_bg_color(ui_btn_pts_next, lv_color_hex(C_HDR_LINE), 0);
     lv_obj_set_style_radius(ui_btn_pts_next, 6, 0);
     lv_obj_add_event_cb(ui_btn_pts_next, btn_pts_next_cb, LV_EVENT_CLICKED, nullptr);
@@ -4860,48 +5232,60 @@ static void build_ui()
 
     // ── SENSOR tab ───────────────────────────────────────────────────────
     lv_obj_t *ts = lv_tabview_add_tab(tv,
-        UI_COMPACT_HEADER ? LV_SYMBOL_EYE_OPEN : LV_SYMBOL_EYE_OPEN " SNS");
+        UI_COMPACT_HEADER ? LV_SYMBOL_EYE_OPEN : "SENSOR");
     lv_obj_set_style_bg_color(ts, lv_color_hex(C_BG), 0);
-    lv_obj_set_style_pad_all(ts, 10, 0);
+    lv_obj_set_style_pad_all(ts, UI_TALL ? 12 : 8, 0);
+    lv_obj_set_style_pad_row(ts, UI_TALL ? 10 : 6, 0);
+    lv_obj_set_style_pad_column(ts, UI_TALL ? 10 : 6, 0);
+    lv_obj_set_layout(ts, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(ts, UI_TALL ? LV_FLEX_FLOW_ROW_WRAP : LV_FLEX_FLOW_COLUMN);
     lv_obj_clear_flag(ts, LV_OBJ_FLAG_SCROLLABLE);
 
-    auto sec_lbl = [&](lv_obj_t *p, int y, const char *t) {
-        lv_obj_t *l = lv_label_create(p);
-        lv_label_set_text(l, t);
-        lv_obj_align(l, LV_ALIGN_TOP_LEFT, 0, y);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(l, lv_color_hex(C_HDR_LINE), 0);
+    static const uint32_t k_sens_accent[5] = {
+        C_SENS_LZR, C_SENS_IMU, C_SENS_LNK, C_SENS_BTN, C_SENS_TMP
     };
-    auto val_lbl = [&](lv_obj_t *p, int y) -> lv_obj_t * {
-        lv_obj_t *l = lv_label_create(p);
-        lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
-        lv_obj_set_width(l, SCREEN_W - 20);
-        lv_obj_align(l, LV_ALIGN_TOP_LEFT, 0, y);
-        lv_label_set_text(l, "---");
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_16, 0);
-        lv_obj_set_style_text_color(l, lv_color_hex(C_TEXT), 0);
-        return l;
-    };
+    const int card_w = UI_TALL ? ((SCREEN_W - 34) / 2) : (SCREEN_W - 16);
+    const int card_h = UI_TALL ? ((CONTENT_H - 44) / 3) : 0;
 
-    sec_lbl(ts, 0,
-#if LZR_SHARE_USB_UART
-            "LASER  UART0  RXD0=IO3  TXD0=IO1");
-#else
-            "UART LASER");
-#endif
-    ui_lbl_tof_val = val_lbl(ts, 22);
-    sec_lbl(ts, 58, "AZIMUTH / INCLINATION / ROLL");
-    ui_lbl_imu_val = val_lbl(ts, 80);
-    sec_lbl(ts, 116, "STATUS");
-    ui_lbl_sens_stat = val_lbl(ts, 138);
-    sec_lbl(ts, 174, "CAPTURE BUTTON");
-    ui_lbl_sens_btn = val_lbl(ts, 196);
-    sec_lbl(ts, 232, "TEMPERATURE (MCU)");
-    ui_lbl_sens_temp = val_lbl(ts, 254);
+    auto mk_card = [&](int idx, const char *title, lv_obj_t **val_out) {
+        lv_obj_t *c = lv_obj_create(ts);
+        ui_sens_box[idx] = c;
+        const bool half = UI_TALL && idx < 4;
+        lv_obj_set_width(c, half ? card_w : (UI_TALL ? (SCREEN_W - 24) : LV_PCT(100)));
+        if (UI_TALL)
+            lv_obj_set_height(c, card_h);
+        else
+            lv_obj_set_flex_grow(c, 1);
+        lv_obj_set_style_radius(c, 12, 0);
+        lv_obj_set_style_bg_color(c, lv_color_hex(ucol_topbar()), 0);
+        lv_obj_set_style_border_width(c, 5, 0);
+        lv_obj_set_style_border_side(c, LV_BORDER_SIDE_LEFT, 0);
+        lv_obj_set_style_border_color(c, lv_color_hex(k_sens_accent[idx]), 0);
+        lv_obj_set_style_pad_all(c, 10, 0);
+        lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_t *t = lv_label_create(c);
+        lv_label_set_text(t, title);
+        lv_obj_set_style_text_color(t, lv_color_hex(k_sens_accent[idx]), 0);
+        lv_obj_set_style_text_font(t, UI_TALL ? &lv_font_montserrat_14 : &lv_font_montserrat_12, 0);
+        lv_obj_align(t, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_t *v = lv_label_create(c);
+        lv_label_set_long_mode(v, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(v, (half ? card_w : (SCREEN_W - 24)) - 28);
+        lv_obj_align(v, LV_ALIGN_TOP_LEFT, 0, UI_TALL ? 24 : 22);
+        lv_label_set_text(v, UI_NA);
+        lv_obj_set_style_text_font(v, UI_TALL ? &lv_font_montserrat_16 : &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(v, lv_color_hex(ucol_text()), 0);
+        *val_out = v;
+    };
+    mk_card(0, "LASER", &ui_lbl_tof_val);
+    mk_card(1, "IMU", &ui_lbl_imu_val);
+    mk_card(2, "LINK", &ui_lbl_sens_stat);
+    mk_card(3, "BUTTON", &ui_lbl_sens_btn);
+    mk_card(4, "TEMP", &ui_lbl_sens_temp);
 
     // ── FILES tab ────────────────────────────────────────────────────────
     lv_obj_t *tf = lv_tabview_add_tab(tv,
-        UI_COMPACT_HEADER ? LV_SYMBOL_FILE : LV_SYMBOL_FILE " FIL");
+        UI_COMPACT_HEADER ? LV_SYMBOL_FILE : "FILE");
     lv_obj_set_style_bg_color(tf, lv_color_hex(C_BG), 0);
     lv_obj_set_style_pad_all(tf, 6, 0);
     lv_obj_clear_flag(tf, LV_OBJ_FLAG_SCROLLABLE);
@@ -4929,7 +5313,7 @@ static void build_ui()
 
     auto fbtn = [&](lv_obj_t *p, uint32_t c, const char *t, lv_event_cb_t cb) {
         lv_obj_t *b = lv_btn_create(p);
-        lv_obj_set_size(b, UI_COMPACT_HEADER ? 96 : 148, 40);
+        lv_obj_set_size(b, UI_TALL ? 140 : (UI_COMPACT_HEADER ? 96 : 148), UI_TALL ? 48 : 40);
         lv_obj_set_style_bg_color(b, lv_color_hex(c), 0);
         lv_obj_set_style_radius(b, 8, 0);
         lv_obj_set_style_shadow_width(b, 4, 0);
@@ -4966,12 +5350,12 @@ static void build_ui()
     // ── SETUP — Bright | Cal | BT | About ───────────────────────────────
     {
         lv_obj_t *tsetup = lv_tabview_add_tab(tv,
-            UI_COMPACT_HEADER ? LV_SYMBOL_SETTINGS : LV_SYMBOL_SETTINGS " SET");
+            UI_COMPACT_HEADER ? LV_SYMBOL_SETTINGS : "SETUP");
         lv_obj_set_style_bg_color(tsetup, lv_color_hex(C_BG), 0);
         lv_obj_set_style_pad_all(tsetup, 2, 0);
         lv_obj_clear_flag(tsetup, LV_OBJ_FLAG_SCROLLABLE);
 
-        const int SUB_BAR_H   = 32;
+        const int SUB_BAR_H   = UI_TALL ? 40 : 32;
         const int SETUP_BAR_Y = TV_Y + 2;
         const int setup_sub_y = (SETUP_BAR_Y + SUB_BAR_H) - TV_Y + 14;
         const int sub_h       = TV_H - setup_sub_y - 6;
@@ -4987,7 +5371,8 @@ static void build_ui()
         lv_obj_set_flex_flow(t_disp, LV_FLEX_FLOW_COLUMN);
         lv_obj_set_style_pad_all(t_disp, 12, 0);
         lv_obj_set_style_pad_row(t_disp, 10, 0);
-        lv_obj_clear_flag(t_disp, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(t_disp, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_scroll_dir(t_disp, LV_DIR_VER);
 
         lv_obj_t *bl_ttl = lv_label_create(t_disp);
         lv_label_set_text(bl_ttl, "Display brightness");
@@ -5012,6 +5397,30 @@ static void build_ui()
         lv_obj_set_width(bl_hint, SCREEN_W - 32);
         lv_label_set_long_mode(bl_hint, LV_LABEL_LONG_WRAP);
         lv_obj_set_style_text_color(bl_hint, lv_color_hex(C_GREY), 0);
+
+        lv_obj_t *vol_ttl = lv_label_create(t_disp);
+        lv_label_set_text(vol_ttl, "Speaker volume");
+        lv_obj_set_style_text_font(vol_ttl, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_color(vol_ttl, lv_color_hex(C_HDR_LINE), 0);
+
+        ui_lbl_setup_vol = lv_label_create(t_disp);
+        lv_label_set_text(ui_lbl_setup_vol, UI_NA);
+        lv_obj_set_style_text_font(ui_lbl_setup_vol, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_color(ui_lbl_setup_vol, lv_color_hex(C_TEXT), 0);
+        refresh_setup_vol_label();
+
+        ui_slider_vol = lv_slider_create(t_disp);
+        lv_obj_set_width(ui_slider_vol, SCREEN_W - 40);
+        lv_slider_set_range(ui_slider_vol, 0, 100);
+        lv_slider_set_value(ui_slider_vol, g_volume_pct, LV_ANIM_OFF);
+        lv_obj_add_event_cb(ui_slider_vol, setup_vol_slider_cb, LV_EVENT_VALUE_CHANGED, nullptr);
+        lv_obj_add_event_cb(ui_slider_vol, setup_vol_slider_cb, LV_EVENT_RELEASED, nullptr);
+
+        lv_obj_t *vol_hint = lv_label_create(t_disp);
+        lv_label_set_text(vol_hint, "0 = mute. Saved when you release the slider.");
+        lv_obj_set_width(vol_hint, SCREEN_W - 32);
+        lv_label_set_long_mode(vol_hint, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_color(vol_hint, lv_color_hex(C_GREY), 0);
 
         lv_obj_t *th_ttl = lv_label_create(t_disp);
         lv_label_set_text(th_ttl, "Theme");
@@ -5071,7 +5480,83 @@ static void build_ui()
         lv_obj_set_style_text_color(ui_lbl_setup_geom, lv_color_hex(C_GREY), 0);
         lv_obj_set_style_text_font(ui_lbl_setup_geom, &lv_font_montserrat_12, 0);
 
-        lv_obj_t *proj_row = setup_mk_btn_row(t_cal, 34);
+        ui_trim_box = lv_obj_create(t_cal);
+        lv_obj_set_width(ui_trim_box, SCREEN_W - 28);
+        lv_obj_set_height(ui_trim_box, UI_TALL ? 132 : 100);
+        lv_obj_set_style_radius(ui_trim_box, 10, 0);
+        lv_obj_set_style_bg_color(ui_trim_box, lv_color_hex(ucol_topbar()), 0);
+        lv_obj_set_style_border_width(ui_trim_box, 1, 0);
+        lv_obj_set_style_border_color(ui_trim_box, lv_color_hex(ucol_border()), 0);
+        lv_obj_set_style_pad_all(ui_trim_box, 6, 0);
+        lv_obj_clear_flag(ui_trim_box, LV_OBJ_FLAG_SCROLLABLE);
+
+        ui_trim_body = lv_obj_create(ui_trim_box);
+        lv_obj_set_size(ui_trim_body, SCREEN_W - 80, UI_TALL ? 28 : 22);
+        lv_obj_align(ui_trim_body, LV_ALIGN_CENTER, 0, 4);
+        lv_obj_set_style_radius(ui_trim_body, 8, 0);
+        lv_obj_set_style_bg_color(ui_trim_body, lv_color_hex(0x90A4AEu), 0);
+        lv_obj_set_style_border_width(ui_trim_body, 2, 0);
+        lv_obj_clear_flag(ui_trim_body, LV_OBJ_FLAG_SCROLLABLE);
+
+        ui_trim_mark = lv_obj_create(ui_trim_box);
+        lv_obj_set_size(ui_trim_mark, 18, UI_TALL ? 40 : 32);
+        lv_obj_align(ui_trim_mark, LV_ALIGN_CENTER, 0, 4);
+        lv_obj_set_style_radius(ui_trim_mark, 6, 0);
+        lv_obj_set_style_bg_color(ui_trim_mark, lv_color_hex(C_TRIM_MARK), 0);
+        lv_obj_set_style_border_width(ui_trim_mark, 0, 0);
+        lv_obj_clear_flag(ui_trim_mark, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(ui_trim_mark, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+
+        ui_lbl_trim_mark = lv_label_create(ui_trim_box);
+        lv_label_set_text(ui_lbl_trim_mark, "0 mm");
+        lv_obj_set_style_text_font(ui_lbl_trim_mark,
+                                   UI_TALL ? &lv_font_montserrat_14 : &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_color(ui_lbl_trim_mark, lv_color_hex(C_TRIM_MARK), 0);
+        lv_obj_align(ui_lbl_trim_mark, LV_ALIGN_BOTTOM_MID, 0, 0);
+
+        ui_trim_tag_bot = lv_obj_create(ui_trim_box);
+        lv_obj_set_size(ui_trim_tag_bot, 64, 22);
+        lv_obj_align(ui_trim_tag_bot, LV_ALIGN_BOTTOM_LEFT, 4, 0);
+        lv_obj_set_style_radius(ui_trim_tag_bot, 6, 0);
+        lv_obj_set_style_border_width(ui_trim_tag_bot, 0, 0);
+        lv_obj_clear_flag(ui_trim_tag_bot, LV_OBJ_FLAG_SCROLLABLE);
+        {
+            lv_obj_t *lb = lv_label_create(ui_trim_tag_bot);
+            lv_label_set_text(lb, "BOTTOM");
+            lv_obj_set_style_text_font(lb, &lv_font_montserrat_12, 0);
+            lv_obj_set_style_text_color(lb, lv_color_hex(C_WHITE), 0);
+            lv_obj_center(lb);
+        }
+
+        ui_trim_tag_top = lv_obj_create(ui_trim_box);
+        lv_obj_set_size(ui_trim_tag_top, 52, 22);
+        lv_obj_align(ui_trim_tag_top, LV_ALIGN_TOP_RIGHT, -4, 0);
+        lv_obj_set_style_radius(ui_trim_tag_top, 6, 0);
+        lv_obj_set_style_border_width(ui_trim_tag_top, 0, 0);
+        lv_obj_clear_flag(ui_trim_tag_top, LV_OBJ_FLAG_SCROLLABLE);
+        {
+            lv_obj_t *lb = lv_label_create(ui_trim_tag_top);
+            lv_label_set_text(lb, "TOP");
+            lv_obj_set_style_text_font(lb, &lv_font_montserrat_12, 0);
+            lv_obj_set_style_text_color(lb, lv_color_hex(C_WHITE), 0);
+            lv_obj_center(lb);
+        }
+
+        ui_trim_laser = lv_obj_create(ui_trim_box);
+        lv_obj_set_size(ui_trim_laser, 56, 18);
+        lv_obj_align(ui_trim_laser, LV_ALIGN_RIGHT_MID, -8, 4);
+        lv_obj_set_style_radius(ui_trim_laser, 4, 0);
+        lv_obj_set_style_border_width(ui_trim_laser, 0, 0);
+        lv_obj_clear_flag(ui_trim_laser, LV_OBJ_FLAG_SCROLLABLE);
+        {
+            lv_obj_t *lb = lv_label_create(ui_trim_laser);
+            lv_label_set_text(lb, "LASER");
+            lv_obj_set_style_text_font(lb, &lv_font_montserrat_12, 0);
+            lv_obj_set_style_text_color(lb, lv_color_hex(C_WHITE), 0);
+            lv_obj_center(lb);
+        }
+
+        lv_obj_t *proj_row = setup_mk_btn_row(t_cal, UI_TALL ? 40 : 34);
         ui_btn_geom_bottom = setup_mk_btn(proj_row, "Bottom", setup_geom_bottom_cb,
                                           nullptr, C_HDR_LINE);
         ui_btn_geom_top = setup_mk_btn(proj_row, "Top", setup_geom_top_cb,
@@ -5083,6 +5568,34 @@ static void build_ui()
         setup_mk_btn(geom_row, "Rst", setup_geom_rst_cb, nullptr, C_BTN_BT);
         refresh_setup_geom_label();
         refresh_geom_proj_buttons();
+
+        lv_obj_t *shot_ttl = lv_label_create(t_cal);
+        lv_label_set_text(shot_ttl, "Measure button");
+        lv_obj_set_style_text_font(shot_ttl, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(shot_ttl, lv_color_hex(C_HDR_LINE), 0);
+
+        lv_obj_t *shot_row = setup_mk_btn_row(t_cal, UI_TALL ? 40 : 34);
+        ui_btn_shot_two = setup_mk_btn(shot_row, "2-tap", setup_shot_mode_cb,
+                                       (void *)(intptr_t)SHOT_TWO, C_HDR_LINE);
+        ui_btn_shot_one = setup_mk_btn(shot_row, "1-tap", setup_shot_mode_cb,
+                                       (void *)(intptr_t)SHOT_ONE, C_GREY);
+        ui_btn_shot_cont = setup_mk_btn(shot_row, "Cont", setup_shot_mode_cb,
+                                        (void *)(intptr_t)SHOT_CONT, C_GREY);
+
+        lv_obj_t *nav_row = setup_mk_btn_row(t_cal, UI_TALL ? 40 : 34);
+        ui_btn_nav_hold = setup_mk_btn(nav_row, "Hold 5s nav OFF", setup_nav_hold_cb,
+                                       nullptr, C_GREY);
+        lv_obj_set_width(ui_btn_nav_hold, lv_pct(96));
+        refresh_shot_mode_buttons();
+
+        lv_obj_t *shot_hint = lv_label_create(t_cal);
+        lv_label_set_text(shot_hint,
+            "2-tap: aim then capture. 1-tap: one press. Cont: tap start/stop; "
+            "skips repeats. Hold 5s (1/2-tap only) writes nav x3.");
+        lv_obj_set_width(shot_hint, SCREEN_W - 24);
+        lv_label_set_long_mode(shot_hint, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_color(shot_hint, lv_color_hex(C_GREY), 0);
+        lv_obj_set_style_text_font(shot_hint, &lv_font_montserrat_12, 0);
 
         lv_obj_t *az_ttl = lv_label_create(t_cal);
         lv_label_set_text(az_ttl, "Azimuth offset");
@@ -5219,21 +5732,32 @@ static void build_ui()
         lv_obj_t *t_about = lv_tabview_add_tab(sub_tv, "About");
         setup_sub_panel_layout(t_about, true, true);
 
-        setup_mk_label_wrap(t_about, "MIRA Robotica", &lv_font_montserrat_14,
+        if (UI_TALL) {
+            lv_obj_set_style_pad_row(t_about, 14, 0);
+            lv_obj_set_style_pad_top(t_about, 18, 0);
+        }
+
+        setup_mk_label_wrap(t_about, "MIRA Robotica",
+                            UI_TALL ? &lv_font_montserrat_20 : &lv_font_montserrat_14,
                             C_HDR_LINE, LV_TEXT_ALIGN_CENTER);
         setup_mk_label_wrap(t_about, "https://www.mirarobotica.com/",
-                            &lv_font_montserrat_12, C_HDR_LINE, LV_TEXT_ALIGN_CENTER);
-        setup_mk_label_wrap(t_about, "MM1-BLACK", &lv_font_montserrat_14,
+                            UI_TALL ? &lv_font_montserrat_16 : &lv_font_montserrat_12,
+                            C_HDR_LINE, LV_TEXT_ALIGN_CENTER);
+        setup_mk_label_wrap(t_about, "MM1-BLACK",
+                            UI_TALL ? &lv_font_montserrat_20 : &lv_font_montserrat_14,
                             ucol_text(), LV_TEXT_ALIGN_CENTER);
-        ui_lbl_setup_ver = setup_mk_label_wrap(t_about, UI_NA, &lv_font_montserrat_12,
+        ui_lbl_setup_ver = setup_mk_label_wrap(t_about, UI_NA,
+                                               UI_TALL ? &lv_font_montserrat_16 : &lv_font_montserrat_12,
                                                ucol_text(), LV_TEXT_ALIGN_CENTER);
         setup_mk_label_wrap(t_about,
             "Firmware update (PC, Chrome/Edge):\n"
             "https://verlab.github.io/mm1-black/",
-            &lv_font_montserrat_12, ucol_grey(), LV_TEXT_ALIGN_CENTER);
+            UI_TALL ? &lv_font_montserrat_16 : &lv_font_montserrat_12,
+            ucol_grey(), LV_TEXT_ALIGN_CENTER);
 
 #ifdef ARDUINO_ARCH_ESP32
-        ui_qr_fw_update = lv_qrcode_create(t_about, UI_COMPACT_HEADER ? 96 : 120,
+        ui_qr_fw_update = lv_qrcode_create(t_about,
+                                           UI_TALL ? 200 : (UI_COMPACT_HEADER ? 96 : 120),
                                            lv_color_hex(0x111827),
                                            lv_color_hex(0xFFFFFF));
         lv_obj_set_style_border_color(ui_qr_fw_update, lv_color_hex(ucol_border()), 0);
@@ -5362,9 +5886,12 @@ void setup()
     }
 #ifdef ARDUINO_ARCH_ESP32
     prefs_load_backlight();
+    prefs_load_volume();
     tft_bl_init();
     tft_bl_apply(g_backlight_pct);
     audio_init_hw();
+    audio_apply_volume(g_volume_pct);
+    bat_adc_init();
 #endif
     show_boot_splash_tft();
     p4_btn_init();
@@ -5389,12 +5916,15 @@ void setup()
     tft.setTouch(const_cast<uint16_t*>(TOUCH_CAL));
 #ifdef ARDUINO_ARCH_ESP32
     prefs_load_backlight();
+    prefs_load_volume();
     tft_bl_init();
     tft_bl_apply(g_backlight_pct);
+    bat_adc_init();
 #endif
     tft.fillScreen(TFT_BLACK);
 #ifdef ARDUINO_ARCH_ESP32
     audio_init_hw();
+    audio_apply_volume(g_volume_pct);
 #endif
     show_boot_splash_tft();
     pinMode(USER_BUTTON_PIN, INPUT_PULLUP);
@@ -5445,6 +5975,7 @@ void setup()
     prefs_load_az_offset();
     prefs_load_geometry();
     prefs_load_ui_theme();
+    prefs_load_shot();
 #ifndef ARDUINO_ARCH_ESP32
     prefs_load_backlight();
     tft_bl_apply(g_backlight_pct);
@@ -5525,25 +6056,89 @@ static void user_btn_cap_do_capture(void)
     }
 }
 
-/** One debounced press (LOW): 1st = laser only; 2nd = capture sound + measure. */
-static void user_btn_on_press(void)
+static void user_btn_on_down(void)
 {
 #ifdef ARDUINO_ARCH_ESP32
     unsigned long now = millis();
-    if ((now - user_btn_last_tap_ms) < BTN_TAP_MIN_MS)
+    if ((now - user_btn_last_tap_ms) < BTN_TAP_MIN_MS && g_shot_mode != SHOT_CONT)
         return;
     user_btn_last_tap_ms = now;
     g_btn_tap_count++;
+    g_btn_down_ms = now;
+    g_btn_held = true;
+    g_nav_hold_fired = false;
+    g_ignore_btn_up = false;
 
-    if (!user_btn_cap_armed) {
-        user_btn_cap_arm();
+    if (g_shot_mode == SHOT_CONT) {
+        if (g_cont_active) {
+            shot_cont_stop(LV_SYMBOL_CLOSE " Continuous off");
+        } else {
+            g_cont_active = true;
+            g_cont_last_ms = 0;
+            lzr_btn_aim_active = true;
+            lzr_aim_on();
+            cap_ui_set_state(CAP_UI_AIM);
+            set_fstatus(LV_SYMBOL_EYE_OPEN " Continuous — tap to stop");
+        }
+        g_ignore_btn_up = true;
         return;
     }
 
-    user_btn_cap_do_capture();
+    if (g_shot_mode == SHOT_TWO && !user_btn_cap_armed) {
+        user_btn_cap_arm();
+        g_ignore_btn_up = true;
+        return;
+    }
 #else
     (void)0;
 #endif
+}
+
+static void user_btn_on_up(void)
+{
+#ifdef ARDUINO_ARCH_ESP32
+    g_btn_held = false;
+    if (g_nav_hold_fired || g_ignore_btn_up)
+        return;
+    if (g_shot_mode == SHOT_CONT)
+        return;
+    if (g_shot_mode == SHOT_ONE)
+        user_btn_cap_do_capture();
+    else if (g_shot_mode == SHOT_TWO && user_btn_cap_armed)
+        user_btn_cap_do_capture();
+#else
+    (void)0;
+#endif
+}
+
+static void user_btn_hold_tick(unsigned long now)
+{
+    if (!g_btn_held || g_nav_hold_fired)
+        return;
+    if (!g_nav_hold_en || g_shot_mode == SHOT_CONT)
+        return;
+    if ((now - g_btn_down_ms) < NAV_HOLD_MS)
+        return;
+    g_nav_hold_fired = true;
+    g_ignore_btn_up = true;
+    user_btn_cap_armed = false;
+    add_nav_triple();
+    lzr_shutdown_beam();
+    cap_ui_set_state(CAP_UI_IDLE);
+}
+
+static void user_btn_cont_tick(unsigned long now)
+{
+    if (!g_cont_active)
+        return;
+    if ((now - g_cont_last_ms) < CONT_SHOT_GAP_MS)
+        return;
+    g_cont_last_ms = now;
+    if (!lzr_measure_once_blocking())
+        return;
+    if (!shot_differs_from_last())
+        return;
+    add_point(PT_SAMPLE, false);
 }
 
 static void user_btn_cap_tick(unsigned long now)
@@ -5580,10 +6175,14 @@ void loop()
             s_stable_down = now_down;
             user_btn_stable = x;
             if (now_down)
-                user_btn_on_press();
+                user_btn_on_down();
+            else
+                user_btn_on_up();
         }
     }
 
+    user_btn_hold_tick(m);
+    user_btn_cont_tick(m);
     user_btn_cap_tick(m);
 
 #ifdef ARDUINO_ARCH_ESP32

@@ -96,7 +96,7 @@ Settled in `src/board/p4/mm1_p4_pins.h` (silk labels on the 40-pin header):
 | IMU INT | — | Not used (firmware polls) |
 | Laser RX / TX | 21 / 22 | Module TX→21, module RX→22; swap if no UART data |
 | Capture button | **5** | Silk `5` == GPIO5; wire to adjacent GND (active low) |
-| Battery ADC | — | Not exposed on this carrier |
+| Battery ADC | **20** | On-board divider R12 200k / R15 100k (`Vbat/3`). GPIO20 is also C6 SDIO — do not start ESP-Hosted on this pin. |
 
 Schematic: `docs/datasheets/ESP32-P4-WIFI6-Touch-LCD-4.3-schematic.pdf`.
 GPIOs 16–20 are the ESP32-C6 SDIO link and do **not** appear on J3.
