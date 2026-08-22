@@ -11,7 +11,8 @@
  *
  * Tabs: POINTS | VIEW | SENSOR | FILE | SETUP (sub: Bright, Cal, BT, WiFi, About)
  * Cal menu: IMU | Laser | Trim | Measure
- * VIEW: TopoDroid plan (east/south) + extended profile (along/down).
+ * VIEW: TopoDroid plan (east/north from azi) + profile (along/up from inc).
+ * Splays stay on the current station; 3 matching command shots move the reference.
  *
  * BT BLE **SAP6** (CaveBLE GATT) for TopoDroid / SexyTopo / DiscoX-class apps.
  * Leg notify 17 B + ACK 0x55/0x56; queue + 5 s resend. CSV on SD + Wi‑Fi portal for file export.
@@ -2041,64 +2042,188 @@ static void refresh_table_after_point_change(void)
     view_invalidate();
 }
 
-/* TopoDroid NumShot.compute: plan (easting, south) + extended (h along, v down). */
+/* TopoDroid: (L, azi, inc) → east/north/up. Splays stay on the station;
+ * three matching command shots (NAV x3, or three Regulars that agree) move it. */
 struct ViewSta {
     float e, s, h, v;
-    uint8_t nav;
+};
+
+struct ViewRay {
+    float e0, s0, h0, v0;
+    float e1, s1, h1, v1;
+    uint8_t leg;
     uint8_t ok;
 };
 
 static ViewSta g_view_sta[MAX_PTS + 1];
-static int     g_view_n = 0;
+static ViewRay g_view_ray[MAX_PTS];
+static int     g_view_nsta = 0;
+static int     g_view_nray = 0;
+static int     g_view_nleg = 0;
+static int     g_view_nspl = 0;
+
+static float view_ang_diff(float a, float b)
+{
+    float d = fabsf(norm_deg360(a) - norm_deg360(b));
+    return (d > 180.f) ? (360.f - d) : d;
+}
+
+static bool view_shots_match(const MeasPoint &a, const MeasPoint &b)
+{
+    if (!isfinite(a.dist) || !isfinite(b.dist) || a.dist < 0.f || b.dist < 0.f)
+        return false;
+    if (fabsf(a.dist - b.dist) > 0.05f)
+        return false;
+    if (view_ang_diff(a.yaw, b.yaw) > 3.f)
+        return false;
+    if (fabsf(a.pitch - b.pitch) > 3.f)
+        return false;
+    return true;
+}
+
+static bool view_is_leg_triple(int i)
+{
+    if (i < 0 || i + 2 >= pt_count)
+        return false;
+    const MeasPoint &a = pts[i];
+    const MeasPoint &b = pts[i + 1];
+    const MeasPoint &c = pts[i + 2];
+    if (a.type == PT_NAV && b.type == PT_NAV && c.type == PT_NAV)
+        return true;
+    if (a.type != PT_SAMPLE || b.type != PT_SAMPLE || c.type != PT_SAMPLE)
+        return false;
+    return view_shots_match(a, b) && view_shots_match(b, c);
+}
+
+static void view_polar_xyz(float L, float azi_deg, float inc_deg,
+                           float *de, float *dn, float *du)
+{
+    const float d2r = 0.01745329252f;
+    const float b  = azi_deg * d2r;
+    const float c  = inc_deg * d2r;
+    const float dh = L * cosf(c);
+    *de = dh * sinf(b);
+    *dn = dh * cosf(b);
+    *du = L * sinf(c);
+}
+
+static void view_avg_xyz(int i, float *de, float *dn, float *du)
+{
+    float se = 0.f, sn = 0.f, su = 0.f;
+    int n = 0;
+    for (int k = 0; k < 3; k++) {
+        const MeasPoint &p = pts[i + k];
+        if (!isfinite(p.dist) || p.dist < 0.f)
+            continue;
+        float e, nn, u;
+        view_polar_xyz(p.dist, p.yaw, p.pitch, &e, &nn, &u);
+        se += e;
+        sn += nn;
+        su += u;
+        n++;
+    }
+    if (n < 1) {
+        *de = *dn = *du = 0.f;
+        return;
+    }
+    *de = se / (float)n;
+    *dn = sn / (float)n;
+    *du = su / (float)n;
+}
+
+static void view_push_sta(float e, float n, float h, float u)
+{
+    if (g_view_nsta >= MAX_PTS + 1)
+        return;
+    ViewSta &st = g_view_sta[g_view_nsta++];
+    st.e = e;
+    st.s = -n;
+    st.h = h;
+    st.v = -u;
+}
+
+static void view_push_ray(float e0, float n0, float h0, float u0,
+                          float e1, float n1, float h1, float u1,
+                          bool leg, bool ok)
+{
+    if (g_view_nray >= MAX_PTS)
+        return;
+    ViewRay &r = g_view_ray[g_view_nray++];
+    r.e0 = e0;
+    r.s0 = -n0;
+    r.h0 = h0;
+    r.v0 = -u0;
+    r.e1 = e1;
+    r.s1 = -n1;
+    r.h1 = h1;
+    r.v1 = -u1;
+    r.leg = leg ? 1 : 0;
+    r.ok  = ok ? 1 : 0;
+    if (leg)
+        g_view_nleg++;
+    else
+        g_view_nspl++;
+}
 
 static void view_rebuild(void)
 {
-    const float d2r = 0.01745329252f;
-    float e = 0.f, s = 0.f, h = 0.f, v = 0.f;
-    g_view_n = 1;
-    g_view_sta[0].e = 0.f;
-    g_view_sta[0].s = 0.f;
-    g_view_sta[0].h = 0.f;
-    g_view_sta[0].v = 0.f;
-    g_view_sta[0].nav = 1;
-    g_view_sta[0].ok = 1;
-    for (int i = 0; i < pt_count && g_view_n <= MAX_PTS; i++) {
-        const float L = pts[i].dist;
-        if (!isfinite(L) || L < 0.f)
+    g_view_nsta = 0;
+    g_view_nray = 0;
+    g_view_nleg = 0;
+    g_view_nspl = 0;
+    float re = 0.f, rn = 0.f, rh = 0.f, ru = 0.f;
+    view_push_sta(re, rn, rh, ru);
+
+    int i = 0;
+    while (i < pt_count) {
+        if (view_is_leg_triple(i)) {
+            float de, dn, du;
+            view_avg_xyz(i, &de, &dn, &du);
+            const float ne = re + de;
+            const float nn = rn + dn;
+            const float nh = rh + sqrtf(de * de + dn * dn);
+            const float nu = ru + du;
+            const bool ok = pts[i].laser_ok && pts[i + 1].laser_ok && pts[i + 2].laser_ok;
+            view_push_ray(re, rn, rh, ru, ne, nn, nh, nu, true, ok);
+            view_push_sta(ne, nn, nh, nu);
+            re = ne;
+            rn = nn;
+            rh = nh;
+            ru = nu;
+            i += 3;
             continue;
-        const float b  = pts[i].yaw * d2r;
-        const float c  = pts[i].pitch * d2r;
-        const float dh = L * cosf(c);
-        const float dv = L * sinf(c);
-        e += dh * sinf(b);
-        s -= dh * cosf(b);
-        h += dh;
-        v -= dv;
-        ViewSta &st = g_view_sta[g_view_n++];
-        st.e   = e;
-        st.s   = s;
-        st.h   = h;
-        st.v   = v;
-        st.nav = (pts[i].type == PT_NAV) ? 1 : 0;
-        st.ok  = pts[i].laser_ok ? 1 : 0;
+        }
+        const MeasPoint &p = pts[i];
+        if (isfinite(p.dist) && p.dist >= 0.f) {
+            float de, dn, du;
+            view_polar_xyz(p.dist, p.yaw, p.pitch, &de, &dn, &du);
+            view_push_ray(re, rn, rh, ru,
+                          re + de, rn + dn, rh + sqrtf(de * de + dn * dn), ru + du,
+                          false, p.laser_ok);
+        }
+        i++;
     }
 }
 
 static void view_invalidate(void)
 {
     view_rebuild();
-    if (ui_view_plan)
-        lv_obj_invalidate(ui_view_plan);
-    if (ui_view_prof)
-        lv_obj_invalidate(ui_view_prof);
+    if (ui_active_tab == TAB_VIEW) {
+        if (ui_view_plan)
+            lv_obj_invalidate(ui_view_plan);
+        if (ui_view_prof)
+            lv_obj_invalidate(ui_view_prof);
+    }
     if (ui_lbl_view_plan) {
         char b[48];
-        snprintf(b, sizeof(b), "PLAN  %d shot%s",
-                 pt_count, pt_count == 1 ? "" : "s");
+        snprintf(b, sizeof(b), "PLAN  azi   %d leg", g_view_nleg);
         lv_label_set_text(ui_lbl_view_plan, b);
     }
-    if (ui_lbl_view_prof)
-        lv_label_set_text(ui_lbl_view_prof, "PROFILE  extended");
+    if (ui_lbl_view_prof) {
+        char b[48];
+        snprintf(b, sizeof(b), "PROFILE  inc   %d splay", g_view_nspl);
+        lv_label_set_text(ui_lbl_view_prof, b);
+    }
 }
 
 static void view_fit(float xmin, float xmax, float ymin, float ymax,
@@ -2135,6 +2260,8 @@ static void view_plot_draw(lv_event_t *e, int plan)
 {
     if (lv_event_get_code(e) != LV_EVENT_DRAW_POST)
         return;
+    if (ui_active_tab != TAB_VIEW)
+        return;
     lv_obj_t *obj = lv_event_get_target(e);
     lv_draw_ctx_t *ctx = lv_event_get_draw_ctx(e);
     if (!obj || !ctx)
@@ -2164,45 +2291,49 @@ static void view_plot_draw(lv_event_t *e, int plan)
     p2.y = y0;
     lv_draw_line(ctx, &axis, &p1, &p2);
 
-    if (g_view_n < 1)
-        return;
-
     float xmin = 0.f, xmax = 0.f, ymin = 0.f, ymax = 0.f;
-    for (int i = 0; i < g_view_n; i++) {
+    for (int i = 0; i < g_view_nsta; i++) {
         const float x = plan ? g_view_sta[i].e : g_view_sta[i].h;
         const float y = plan ? g_view_sta[i].s : g_view_sta[i].v;
-        if (i == 0 || x < xmin) xmin = x;
-        if (i == 0 || x > xmax) xmax = x;
-        if (i == 0 || y < ymin) ymin = y;
-        if (i == 0 || y > ymax) ymax = y;
+        if (x < xmin) xmin = x;
+        if (x > xmax) xmax = x;
+        if (y < ymin) ymin = y;
+        if (y > ymax) ymax = y;
+    }
+    for (int i = 0; i < g_view_nray; i++) {
+        const float x = plan ? g_view_ray[i].e1 : g_view_ray[i].h1;
+        const float y = plan ? g_view_ray[i].s1 : g_view_ray[i].v1;
+        if (x < xmin) xmin = x;
+        if (x > xmax) xmax = x;
+        if (y < ymin) ymin = y;
+        if (y > ymax) ymax = y;
     }
 
     float ox, oy, sc;
     view_fit(xmin, xmax, ymin, ymax, x0, y0, w, h, &ox, &oy, &sc);
 
-    lv_draw_line_dsc_t leg;
-    lv_draw_line_dsc_init(&leg);
-    leg.color = lv_color_hex(C_HDR_LINE);
-    leg.width = UI_TALL ? 3 : 2;
-    leg.round_start = 1;
-    leg.round_end = 1;
-
-    for (int i = 1; i < g_view_n; i++) {
-        const float xA = plan ? g_view_sta[i - 1].e : g_view_sta[i - 1].h;
-        const float yA = plan ? g_view_sta[i - 1].s : g_view_sta[i - 1].v;
-        const float xB = plan ? g_view_sta[i].e : g_view_sta[i].h;
-        const float yB = plan ? g_view_sta[i].s : g_view_sta[i].v;
+    lv_draw_line_dsc_t ray;
+    lv_draw_line_dsc_init(&ray);
+    ray.round_start = 1;
+    ray.round_end = 1;
+    for (int i = 0; i < g_view_nray; i++) {
+        const ViewRay &r = g_view_ray[i];
+        const float xA = plan ? r.e0 : r.h0;
+        const float yA = plan ? r.s0 : r.v0;
+        const float xB = plan ? r.e1 : r.h1;
+        const float yB = plan ? r.s1 : r.v1;
         p1.x = (lv_coord_t)lrintf(ox + xA * sc);
         p1.y = (lv_coord_t)lrintf(oy + yA * sc);
         p2.x = (lv_coord_t)lrintf(ox + xB * sc);
         p2.y = (lv_coord_t)lrintf(oy + yB * sc);
-        if (!g_view_sta[i].ok)
-            leg.color = lv_color_hex(C_BAT_LOW);
-        else if (g_view_sta[i].nav)
-            leg.color = lv_color_hex(C_TYPE_N);
+        if (!r.ok)
+            ray.color = lv_color_hex(C_BAT_LOW);
+        else if (r.leg)
+            ray.color = lv_color_hex(C_HDR_LINE);
         else
-            leg.color = lv_color_hex(C_HDR_LINE);
-        lv_draw_line(ctx, &leg, &p1, &p2);
+            ray.color = lv_color_hex(ucol_grey());
+        ray.width = r.leg ? (UI_TALL ? 3 : 2) : 1;
+        lv_draw_line(ctx, &ray, &p1, &p2);
     }
 
     lv_draw_rect_dsc_t dot;
@@ -2210,29 +2341,42 @@ static void view_plot_draw(lv_event_t *e, int plan)
     dot.radius = LV_RADIUS_CIRCLE;
     dot.border_width = 0;
     const int r = UI_TALL ? 5 : 3;
-    for (int i = 0; i < g_view_n; i++) {
+    for (int i = 0; i < g_view_nray; i++) {
+        const ViewRay &rr = g_view_ray[i];
+        if (rr.leg)
+            continue;
+        const float x = plan ? rr.e1 : rr.h1;
+        const float y = plan ? rr.s1 : rr.v1;
+        const lv_coord_t cx = (lv_coord_t)lrintf(ox + x * sc);
+        const lv_coord_t cy = (lv_coord_t)lrintf(oy + y * sc);
+        lv_area_t d;
+        d.x1 = cx - 2;
+        d.y1 = cy - 2;
+        d.x2 = cx + 2;
+        d.y2 = cy + 2;
+        dot.bg_color = lv_color_hex(rr.ok ? ucol_grey() : C_BAT_LOW);
+        lv_draw_rect(ctx, &dot, &d);
+    }
+    for (int i = 0; i < g_view_nsta; i++) {
         const float x = plan ? g_view_sta[i].e : g_view_sta[i].h;
         const float y = plan ? g_view_sta[i].s : g_view_sta[i].v;
         const lv_coord_t cx = (lv_coord_t)lrintf(ox + x * sc);
         const lv_coord_t cy = (lv_coord_t)lrintf(oy + y * sc);
+        const int rr = (i == 0 || i == g_view_nsta - 1) ? (r + 2) : r;
         lv_area_t d;
-        const int rr = (i == g_view_n - 1) ? (r + 2) : (g_view_sta[i].nav ? (r + 1) : r);
         d.x1 = cx - rr;
         d.y1 = cy - rr;
         d.x2 = cx + rr;
         d.y2 = cy + rr;
         if (i == 0)
             dot.bg_color = lv_color_hex(C_SD_ON);
-        else if (i == g_view_n - 1)
+        else if (i == g_view_nsta - 1)
             dot.bg_color = lv_color_hex(C_TRIM_MARK);
-        else if (g_view_sta[i].nav)
-            dot.bg_color = lv_color_hex(C_TYPE_N);
         else
-            dot.bg_color = lv_color_hex(C_HDR_LINE);
+            dot.bg_color = lv_color_hex(C_TYPE_N);
         lv_draw_rect(ctx, &dot, &d);
     }
 
-    /* Scale bar ~1/4 of the plot width, snapped to 1/2/5/10 m. */
     float span_m = (float)w / sc * 0.28f;
     float nice = 1.f;
     if (span_m >= 50.f) nice = 50.f;
@@ -6373,6 +6517,7 @@ static void build_ui()
     lv_obj_set_layout(tvw, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(tvw, LV_FLEX_FLOW_COLUMN);
     lv_obj_clear_flag(tvw, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(tvw, LV_OBJ_FLAG_CLICKABLE);
 
     auto mk_view_plot = [&](lv_obj_t **box, lv_obj_t **ttl, const char *title,
                             lv_event_cb_t draw_cb) {
@@ -6386,6 +6531,7 @@ static void build_ui()
         lv_obj_set_style_border_color(c, lv_color_hex(ucol_border()), 0);
         lv_obj_set_style_pad_all(c, 6, 0);
         lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(c, draw_cb, LV_EVENT_DRAW_POST, nullptr);
         lv_obj_t *lb = lv_label_create(c);
         *ttl = lb;
@@ -6394,8 +6540,8 @@ static void build_ui()
         lv_obj_set_style_text_color(lb, lv_color_hex(ucol_text()), 0);
         lv_obj_align(lb, LV_ALIGN_TOP_LEFT, 2, 0);
     };
-    mk_view_plot(&ui_view_plan, &ui_lbl_view_plan, "PLAN", view_plan_draw_cb);
-    mk_view_plot(&ui_view_prof, &ui_lbl_view_prof, "PROFILE  extended",
+    mk_view_plot(&ui_view_plan, &ui_lbl_view_plan, "PLAN  azi", view_plan_draw_cb);
+    mk_view_plot(&ui_view_prof, &ui_lbl_view_prof, "PROFILE  inc",
                  view_prof_draw_cb);
 
     // ── SENSOR tab ───────────────────────────────────────────────────────
@@ -6958,7 +7104,7 @@ static void build_ui()
     // ── Render ───────────────────────────────────────────────────────────
     ui_apply_theme_colors();
     refresh_table();
-    view_invalidate();
+    view_rebuild();
     update_active_lbl();
     update_status();
 }

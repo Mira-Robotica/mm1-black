@@ -7,49 +7,6 @@ on:
     branches: [main, dev]
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/pip
-            ~/.platformio/.cache
-          key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini') }}
-          restore-keys: |
-            ${{ runner.os }}-pio-
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install PlatformIO
-        run: pip install --upgrade platformio
-
-      - name: Build denky32
-        run: pio run -e denky32
-
-      - name: Package firmware artifact
-        run: |
-          mkdir -p dist
-          SHA="${GITHUB_SHA::7}"
-          OUT="dist/MM1-BLACK-denky32-${SHA}.bin"
-          cp .pio/build/denky32/firmware.bin "$OUT"
-          sha256sum "$OUT" > "${OUT}.sha256"
-
-      - name: Upload firmware artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: MM1-BLACK-denky32-${{ github.sha }}
-          path: dist/
-          if-no-files-found: error
-          retention-days: 90
-
-  # ESP32-P4 target (v1.0.0). Bring-up only for now — no release artifact yet.
   build-p4:
     runs-on: ubuntu-latest
     steps:
@@ -75,3 +32,19 @@ jobs:
 
       - name: Build mm1_p4
         run: pio run -e mm1_p4
+
+      - name: Package firmware artifact
+        run: |
+          mkdir -p dist
+          SHA="${GITHUB_SHA::7}"
+          OUT="dist/MM1-BLACK-mm1_p4-${SHA}.bin"
+          cp .pio/build/mm1_p4/firmware.bin "$OUT"
+          sha256sum "$OUT" > "${OUT}.sha256"
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MM1-BLACK-mm1_p4-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 90

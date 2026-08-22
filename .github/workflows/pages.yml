@@ -43,18 +43,18 @@ jobs:
           for tag in $(gh release list --repo "${{ github.repository }}" --limit 12 \
             --json tagName -q '.[].tagName'); do
             if gh release download "$tag" --repo "${{ github.repository }}" \
-              -p 'MM1-BLACK-denky32-*.bin' -p 'MM1-BLACK-mm1_p4-*.bin' \
+              -p 'MM1-BLACK-mm1_p4-*.bin' \
               -D _site/bins --clobber; then
               downloaded=$((downloaded + 1))
               echo "OK: $tag"
             else
-              echo "WARN: no .bin for $tag (skipped)"
+              echo "WARN: no P4 .bin for $tag (skipped)"
             fi
           done
           echo "Downloaded ${downloaded} firmware bin(s)"
           ls -la _site/bins/ || echo "No release bins yet"
           if [ "$downloaded" -eq 0 ]; then
-            echo "::error::No firmware bins copied — web installer will 404"
+            echo "::error::No P4 firmware bins copied — web installer will 404"
             exit 1
           fi
           python3 << 'PY'
@@ -65,14 +65,9 @@ jobs:
           def ver_key(tag):
               m = re.search(r"v?(\d+)\.(\d+)\.(\d+)", tag or "")
               return tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
-          for p in sorted(bins.glob("MM1-BLACK-*.bin")):
+          for p in sorted(bins.glob("MM1-BLACK-mm1_p4-*.bin")):
               name = p.name
-              if name.startswith("MM1-BLACK-mm1_p4-"):
-                  board, tag = "mm1_p4", name[len("MM1-BLACK-mm1_p4-"):-4]
-              elif name.startswith("MM1-BLACK-denky32-"):
-                  board, tag = "denky32", name[len("MM1-BLACK-denky32-"):-4]
-              else:
-                  continue
+              board, tag = "mm1_p4", name[len("MM1-BLACK-mm1_p4-"):-4]
               rec = {
                   "tag": tag if tag.startswith("v") else f"v{tag}",
                   "file": f"bins/{name}",

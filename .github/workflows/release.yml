@@ -21,9 +21,9 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.platformio/.cache
-          key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini') }}
+          key: ${{ runner.os }}-pio-p4-${{ hashFiles('platformio.ini') }}
           restore-keys: |
-            ${{ runner.os }}-pio-
+            ${{ runner.os }}-pio-p4-
 
       - uses: actions/setup-python@v5
         with:
@@ -39,23 +39,17 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build firmware (CYD)
-        env:
-          VERSION: ${{ steps.ver.outputs.tag }}
-        run: pio run -e denky32
-
       - name: Build firmware (P4)
         env:
           VERSION: ${{ steps.ver.outputs.tag }}
         run: pio run -e mm1_p4
 
-      - name: Package binaries (Release assets only — never committed)
+      - name: Package binary (Release asset only — never committed)
         run: |
           TAG="${{ steps.ver.outputs.tag }}"
           mkdir -p dist
-          cp .pio/build/denky32/firmware.bin "dist/MM1-BLACK-denky32-${TAG}.bin"
           cp .pio/build/mm1_p4/firmware.bin "dist/MM1-BLACK-mm1_p4-${TAG}.bin"
-          sha256sum dist/MM1-BLACK-*-${TAG}.bin | tee dist/SHA256SUMS
+          sha256sum dist/MM1-BLACK-mm1_p4-${TAG}.bin | tee dist/SHA256SUMS
 
       - name: Resolve release notes (English)
         id: notes
@@ -74,7 +68,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/MM1-BLACK-denky32-${{ steps.ver.outputs.tag }}.bin
             dist/MM1-BLACK-mm1_p4-${{ steps.ver.outputs.tag }}.bin
             dist/SHA256SUMS
           body_path: ${{ steps.notes.outputs.path }}
@@ -84,7 +77,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/MM1-BLACK-denky32-${{ steps.ver.outputs.tag }}.bin
             dist/MM1-BLACK-mm1_p4-${{ steps.ver.outputs.tag }}.bin
             dist/SHA256SUMS
           generate_release_notes: true
