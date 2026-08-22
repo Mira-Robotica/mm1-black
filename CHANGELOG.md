@@ -4,6 +4,15 @@ Mudanças relevantes do **MM1-BLACK** (formato baseado em [Keep a Changelog](htt
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-08-22
+
+### Fixed
+
+- **Captura laser (1-tap / 2-tap / contínuo)**: não reutiliza a última leitura UART.
+  Após o contínuo, one-tap e two-tap gravavam o mesmo shot (cache “fresco” 4 s).
+  Os três modos esperam um **retorno novo** do laser e ignoram a medida se
+  distância / azimute / inclinação coincidirem com o último ponto.
+
 ## [0.7.2] — 2026-06-08
 
 ### Added

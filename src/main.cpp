@@ -1556,17 +1556,17 @@ static void lzr_sync_for_capture()
 }
 
 #if !LZR_CONTINUOUS
-/** Blocking measure (2nd button tap / MEAS): one-shot poll + fallbacks, same path as lzr_sync_for_capture. */
+/** Blocking measure: always wait for a new UART frame (never reuse the last shot). */
 static bool lzr_measure_once_blocking(void)
 {
     if (!lzr_post_init)
         return false;
 
-    const unsigned long now0 = millis();
-    if (lzr_reading_fresh(now0)) {
-        lzr_apply_to_globals(now0);
-        return true;
-    }
+    lzr_uart_drain();
+    lzr_parse_pos = 0;
+    const uint32_t decode0 = lzr_decode_tick;
+    lzr_last_m = NAN;
+    tof_ok = false;
 
     lzr_capture_busy = true;
     cap_ui_set_state(CAP_UI_MEASURING);
@@ -1577,7 +1577,6 @@ static bool lzr_measure_once_blocking(void)
         lzr_poll_state     = 0;
         lzr_one_shot_armed = true;
         lzr_next_poll_ms   = millis();
-        const uint32_t decode0 = lzr_decode_tick;
         unsigned long t0 = millis();
 
         while ((millis() - t0) < tmax) {
@@ -1588,7 +1587,7 @@ static bool lzr_measure_once_blocking(void)
             lv_timer_handler();
             if (lzr_decode_tick != decode0) {
                 lzr_apply_to_globals(millis());
-                if (lzr_reading_fresh(millis())) {
+                if (isfinite(lzr_last_m) && lzr_last_m >= 0.001f) {
                     got = true;
                     break;
                 }
@@ -1605,10 +1604,12 @@ static bool lzr_measure_once_blocking(void)
             lzr_process_incoming();
             cap_ui_tick(now);
             lv_timer_handler();
-            if (lzr_reading_fresh(millis())) {
+            if (lzr_decode_tick != decode0) {
                 lzr_apply_to_globals(millis());
-                got = true;
-                break;
+                if (isfinite(lzr_last_m) && lzr_last_m >= 0.001f) {
+                    got = true;
+                    break;
+                }
             }
             delay(2);
         }
@@ -1619,14 +1620,28 @@ static bool lzr_measure_once_blocking(void)
     lzr_capture_busy   = false;
     lzr_one_shot_armed = false;
     lzr_poll_state     = 0;
-    lzr_apply_to_globals(millis());
-    return got || lzr_reading_fresh(millis());
+    if (got)
+        lzr_apply_to_globals(millis());
+    return got;
 }
 #else
 static bool lzr_measure_once_blocking(void)
 {
-    lzr_apply_to_globals(millis());
-    return isfinite(lzr_last_m) && tof_ok;
+    lzr_uart_drain();
+    lzr_parse_pos = 0;
+    const uint32_t decode0 = lzr_decode_tick;
+    lzr_last_m = NAN;
+    tof_ok = false;
+    const unsigned long t0 = millis();
+    while ((millis() - t0) < 1500UL) {
+        lzr_process_incoming();
+        if (lzr_decode_tick != decode0 && isfinite(lzr_last_m) && lzr_last_m >= 0.001f) {
+            lzr_apply_to_globals(millis());
+            return true;
+        }
+        delay(2);
+    }
+    return false;
 }
 #endif
 
@@ -4304,10 +4319,17 @@ static bool shot_differs_from_last(void)
 
 static void add_nav_triple(void)
 {
+    set_fstatus(LV_SYMBOL_REFRESH " Waiting laser...");
     if (!lzr_measure_once_blocking()) {
         play_error_sound();
         cap_ui_result_pulse(false);
         set_fstatus(LV_SYMBOL_WARNING " Nav: no laser");
+        return;
+    }
+    if (!shot_differs_from_last()) {
+        play_error_sound();
+        cap_ui_result_pulse(false);
+        set_fstatus(LV_SYMBOL_WARNING " Same shot — move, then hold");
         return;
     }
     play_capture_sound();
@@ -4319,6 +4341,8 @@ static void add_nav_triple(void)
 static void shot_cont_stop(const char *msg)
 {
     g_cont_active = false;
+    lzr_last_m = NAN;
+    tof_ok = false;
     lzr_shutdown_beam();
     cap_ui_set_state(CAP_UI_IDLE);
     if (msg)
@@ -7375,6 +7399,7 @@ static void user_btn_cap_do_capture(void)
         return;
     }
 
+    set_fstatus(LV_SYMBOL_REFRESH " Waiting laser...");
     const bool got = lzr_measure_once_blocking();
     lzr_shutdown_beam();
 
@@ -7386,6 +7411,12 @@ static void user_btn_cap_do_capture(void)
                  LV_SYMBOL_WARNING " No reading (rx=%lu) - SETUP Sensor?",
                  (unsigned long)lzr_rx_bytes_total);
         set_fstatus(buf);
+        return;
+    }
+    if (!shot_differs_from_last()) {
+        play_error_sound();
+        cap_ui_result_pulse(false);
+        set_fstatus(LV_SYMBOL_WARNING " Same shot — move, then tap");
         return;
     }
 
@@ -7481,8 +7512,10 @@ static void user_btn_cont_tick(unsigned long now)
     g_cont_last_ms = now;
     if (!lzr_measure_once_blocking())
         return;
-    if (!shot_differs_from_last())
+    if (!shot_differs_from_last()) {
+        lzr_last_m = NAN;
         return;
+    }
     const int n0 = pt_count;
     add_point(PT_SAMPLE, false);
     play_capture_sound();
