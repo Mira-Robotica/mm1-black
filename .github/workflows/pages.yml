@@ -43,7 +43,8 @@ jobs:
           for tag in $(gh release list --repo "${{ github.repository }}" --limit 12 \
             --json tagName -q '.[].tagName'); do
             if gh release download "$tag" --repo "${{ github.repository }}" \
-              -p 'MM1-BLACK-denky32-*.bin' -D _site/bins --clobber; then
+              -p 'MM1-BLACK-denky32-*.bin' -p 'MM1-BLACK-mm1_p4-*.bin' \
+              -D _site/bins --clobber; then
               downloaded=$((downloaded + 1))
               echo "OK: $tag"
             else
@@ -56,6 +57,33 @@ jobs:
             echo "::error::No firmware bins copied — web installer will 404"
             exit 1
           fi
+          python3 << 'PY'
+          import json, re
+          from pathlib import Path
+          bins = Path("_site/bins")
+          out = {}
+          def ver_key(tag):
+              m = re.search(r"v?(\d+)\.(\d+)\.(\d+)", tag or "")
+              return tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
+          for p in sorted(bins.glob("MM1-BLACK-*.bin")):
+              name = p.name
+              if name.startswith("MM1-BLACK-mm1_p4-"):
+                  board, tag = "mm1_p4", name[len("MM1-BLACK-mm1_p4-"):-4]
+              elif name.startswith("MM1-BLACK-denky32-"):
+                  board, tag = "denky32", name[len("MM1-BLACK-denky32-"):-4]
+              else:
+                  continue
+              rec = {
+                  "tag": tag if tag.startswith("v") else f"v{tag}",
+                  "file": f"bins/{name}",
+                  "size": p.stat().st_size,
+              }
+              prev = out.get(board)
+              if not prev or ver_key(rec["tag"]) >= ver_key(prev["tag"]):
+                  out[board] = rec
+          Path("_site/latest.json").write_text(json.dumps(out, indent=2) + "\n")
+          print("latest.json:", json.dumps(out, indent=2))
+          PY
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

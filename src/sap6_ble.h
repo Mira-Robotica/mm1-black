@@ -14,6 +14,10 @@ void sap6_ble_poll(void);
 
 bool sap6_ble_stack_ready(void);
 bool sap6_ble_connected(void);
+/** P4: C6 Hosted is usable (slave FW version or a real BLE MAC). Do not start Wi-Fi if false. */
+bool sap6_ble_c6_ready(void);
+/** Re-probe C6 (version RPC is often 0.0.0 at boot). */
+bool sap6_ble_c6_refresh(void);
 void sap6_ble_get_mac_str(char *buf, size_t len);
 /** ctrl status + free heap for SETUP diagnostics */
 void sap6_ble_format_status(char *buf, size_t len);

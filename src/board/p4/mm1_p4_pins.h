@@ -6,8 +6,8 @@
  *   docs/datasheets/ESP32-P4-WIFI6-Touch-LCD-4.3-schematic.pdf
  *
  * J3 40-pin silk labels are ESP32-P4 GPIO numbers (SDA/SCL = GPIO7/8).
- * GPIOs 16–19 are reserved for the ESP32-C6 SDIO link — not on J3.
- * GPIO20 is the on-board LiPo ADC (also C6 SDIO D2 if ESP-Hosted starts).
+ * GPIOs 14–19 + 54 are the ESP32-C6 Hosted SDIO link (CLK18 CMD19
+ * D0=14 D1=15 D2=16 D3=17 RST=54). GPIO20 is the on-board LiPo ADC.
  */
 
 #pragma once

@@ -39,6 +39,13 @@ void stop();
 bool running();
 uint8_t clients();
 const char* ap_ip();
+const char* last_error();
+
+/** SoftAP firmware upload (POST /update). */
+enum class OtaState : uint8_t { Idle = 0, Receiving, Ok, Fail };
+OtaState ota_state();
+int ota_percent();
+const char *ota_message();
 
 void loop();   /* call from main loop while running; no radio until start() from device */
 

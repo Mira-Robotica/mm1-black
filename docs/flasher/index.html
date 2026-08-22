@@ -6,43 +6,68 @@
     <title>Install MM1-BLACK · MIRA</title>
     <meta
       name="description"
-      content="USB firmware installer for MM1-BLACK (ESP32) — Web Serial, GitHub Releases."
+      content="USB firmware installer for MM1-BLACK — Web Serial, GitHub Releases. CYD and ESP32-P4."
     />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div class="bg-grid" aria-hidden="true"></div>
+    <div class="bg" aria-hidden="true"></div>
     <div class="wrap">
-      <header class="hero">
-        <img src="assets/mira-logo.png" alt="MIRA" width="160" height="56" />
-        <div>
-          <h1>Install MM1-BLACK</h1>
-          <p class="product">MM1-BLACK · ESP32 · USB · Web Serial</p>
-          <p class="sub">
-            Firmware from
-            <a href="https://github.com/verlab/mm1-black/releases">GitHub Releases</a>
-          </p>
-        </div>
+      <header class="top">
+        <img src="assets/mira-logo.png" alt="MIRA" width="112" height="40" />
+        <nav>
+          <a href="https://github.com/verlab/mm1-black/releases">Releases</a>
+          <a href="https://github.com/verlab/mm1-black/blob/main/docs/OTA.md">OTA</a>
+        </nav>
       </header>
+
+      <section class="hero">
+        <p class="kicker">MM1-BLACK · USB installer</p>
+        <h1>Flash firmware</h1>
+        <p class="lede">
+          Chrome or Edge on a desktop. Same images the device installs over Wi-Fi
+          after <strong>SETUP → WiFi → Join</strong>.
+        </p>
+      </section>
 
       <noscript>
         <p class="banner err">JavaScript is required for USB flashing.</p>
       </noscript>
 
       <div id="noSerial" class="banner err hidden" role="alert">
-        Your browser does not support Web Serial.
-        Open this page in <strong>Google Chrome</strong> or <strong>Microsoft Edge</strong>
-        on a desktop PC (not on iOS).
+        Web Serial is unavailable. Open this page in
+        <strong>Google Chrome</strong> or <strong>Microsoft Edge</strong>
+        on a desktop PC (not iOS).
       </div>
 
-      <ol class="steps">
-        <li>Connect <strong>MM1-BLACK</strong> (ESP32) with a USB <strong>data</strong> cable.</li>
-        <li>Close any program that uses the device <strong>USB serial port</strong> (IDE, terminal, monitor).</li>
-        <li>Click <strong>Install</strong> and select the correct <strong>USB serial port</strong>.</li>
-        <li>When prompted, enter download mode: <strong>hold BOOT → tap RST → release RST → release BOOT</strong>.</li>
+      <div id="p4Hint" class="banner warn hidden">
+        P4 uses the <strong>USB TO UART</strong> port (QinHeng <code>1a86:55d3</code>),
+        not USB OTG. A blank board still needs a first PlatformIO flash
+        (bootloader + partitions). This page writes the app image.
+      </div>
+
+      <ol class="steps" id="stepList">
+        <li><span>01</span> USB data cable into MM1-BLACK</li>
+        <li><span>02</span> Close IDE / serial monitor</li>
+        <li><span>03</span> Pick board, then Install</li>
+        <li><span>04</span> BOOT → RST if asked</li>
       </ol>
 
-      <section class="install-panel">
+      <section class="panel">
+        <div class="row">
+          <span class="field-label">Board</span>
+          <div class="board-toggle" role="group" aria-label="Board">
+            <button type="button" class="board-btn active" id="btnBoardCyd" data-board="denky32">
+              CYD
+              <small>ESP32</small>
+            </button>
+            <button type="button" class="board-btn" id="btnBoardP4" data-board="mm1_p4">
+              P4
+              <small>ESP32-P4</small>
+            </button>
+          </div>
+        </div>
+
         <div class="row">
           <label for="releaseSelect">Firmware</label>
           <select id="releaseSelect" disabled>
@@ -61,9 +86,9 @@
             </select>
           </div>
           <div class="installed">
-            <span class="label">Installed</span>
+            <span class="label">On device</span>
             <span id="deviceVersion" class="mono">—</span>
-            <button type="button" class="linkish" id="btnReadVersion" title="Read VERSION @ 9600 baud">
+            <button type="button" class="linkish" id="btnReadVersion" title="Read VERSION from the device">
               Read
             </button>
           </div>
@@ -74,7 +99,7 @@
 
         <label class="ack">
           <input type="checkbox" id="ackFlash" />
-          <span>I understand the risks (do not unplug USB during flash).</span>
+          <span>Do not unplug USB during flash.</span>
         </label>
 
         <button type="button" class="install-btn" id="btnInstall" disabled>
@@ -93,9 +118,8 @@
 
       <footer>
         <a href="https://github.com/verlab/mm1-black">verlab/mm1-black</a>
-        · MIRA
-        · device QR <strong>SETUP → About</strong>
-        · <a href="https://github.com/verlab/mm1-black/blob/main/docs/OTA.md">OTA docs</a>
+        <span>MIRA</span>
+        <span>QR on device · SETUP → About</span>
       </footer>
     </div>
     <script type="module" src="app.js"></script>

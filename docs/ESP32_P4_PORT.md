@@ -114,7 +114,9 @@ Silk **SDA/SCL** are GPIO7/8 (touch/codecs only).
    `kRawTouchDiag` flag in the bring-up sketch disables one side while debugging.
 2. **LVGL 8.3 on the new panel**, buffers in PSRAM. Staying on 8.3 keeps the ~3000
    lines of existing UI code valid; LVGL 9 is a separate migration.
-3. **BLE SAP6 over ESP-Hosted.** The GATT logic in `src/sap6_ble.cpp` is portable;
+3. **BLE SAP6 + Wi-Fi FOTA over ESP-Hosted.** `sap6_ble.cpp` and `web_portal.cpp`
+   now compile for P4. C6 SDIO is CLK18 / CMD19 / D0–D3 = 14–17 / RST 54
+   (not the TF slot 39–44). About → Start AP → `http://192.168.4.1/update`.
    the controller-level calls (`btStart`, `esp_bt_controller_mem_release`,
    `esp_ble_tx_power_set`, `esp_ble_get_bond_device_*`) are not, because the
    controller lives on the C6.

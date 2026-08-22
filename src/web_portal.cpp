@@ -14,9 +14,17 @@
 
 #include <WiFi.h>
 #include <WebServer.h>
+#include <Update.h>
+#if defined(MM1_BOARD_P4)
+#include <SD_MMC.h>
+#define SD SD_MMC
+#include "esp32-hal-hosted.h"
+#include "sap6_ble.h"
+#else
 #include <SD.h>
-#include <esp_wifi.h>
 #include <esp_coexist.h>
+#endif
+#include <esp_wifi.h>
 
 namespace web_portal {
 
@@ -31,6 +39,11 @@ Callbacks  g_cb{};
 bool       g_running      = false;
 bool       g_routes_ready = false;
 char       g_ip[20]       = "0.0.0.0";
+char       g_err[72]      = "";
+OtaState   g_ota_state    = OtaState::Idle;
+int        g_ota_pct      = 0;
+char       g_ota_msg[48]  = "idle";
+size_t     g_ota_written  = 0;
 
 /* ---------- inline page ---------------------------------------------------- */
 
@@ -147,8 +160,10 @@ tr:hover td{background:rgba(91,192,255,.06)}
         <a class="btn" href="/api/files">Files JSON</a>
         <a class="btn" href="/api/status">Status JSON</a>
         <a class="btn" href="/api/points">Points JSON</a>
+        <a class="btn primary" href="https://verlab.github.io/mm1-black/">Install firmware (USB / GitHub)</a>
+        <a class="btn" href="/update">Last-resort upload (firmware.bin only)</a>
       </div>
-      <div class="spark" style="margin-top:12px">All endpoints are read-only.</div>
+      <div class="spark" style="margin-top:12px">CSV endpoints are read-only. Prefer the GitHub installer or SETUP → WiFi → Install.</div>
     </section>
 
     <section class="card col-12">
@@ -327,12 +342,95 @@ void send_sd_file()
 void on_root() { g_server.send_P(200, "text/html", kDashboardHtml); }
 void on_404()  { g_server.send(404, "text/plain", "not found"); }
 
+constexpr char kUpdateHtml[] PROGMEM = R"HTML(<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>MM1-BLACK · Firmware</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#0b0f17;color:#e6edf7;margin:24px}
+a{color:#5bc0ff} .card{background:#121826;border:1px solid #1d2740;border-radius:12px;padding:18px;max-width:520px}
+input,button{font:inherit} button{background:#1f3a66;color:#cfe6ff;border:1px solid #2f558c;border-radius:8px;padding:8px 14px}
+.muted{color:#8b97ad;font-size:13px}
+</style></head><body>
+<div class="card">
+<h2>Last-resort firmware upload</h2>
+<p>Preferred: open <a href="https://verlab.github.io/mm1-black/">verlab.github.io/mm1-black</a> on a PC (USB) or use <b>SETUP → WiFi → Join</b> then <b>Install</b> on the device.</p>
+<p>This form is only for a local <code>firmware.bin</code> (not <code>firmware.factory.bin</code>).</p>
+<form method="POST" action="/update" enctype="multipart/form-data">
+  <p><input type="file" name="firmware" accept=".bin" required></p>
+  <p><button type="submit">Install and reboot</button></p>
+</form>
+<p class="muted">Keep this page open until the board restarts. Do not power off.</p>
+<p><a href="/">Back to console</a></p>
+</div>
+</body></html>)HTML";
+
+void on_update_get() { g_server.send_P(200, "text/html", kUpdateHtml); }
+
+void on_update_done()
+{
+    if (g_ota_state == OtaState::Ok) {
+        g_server.send(200, "text/plain", "OK — rebooting");
+        delay(400);
+        ESP.restart();
+        return;
+    }
+    g_server.send(500, "text/plain", g_ota_msg);
+}
+
+void on_update_upload()
+{
+    HTTPUpload &up = g_server.upload();
+    if (up.status == UPLOAD_FILE_START) {
+        g_ota_state = OtaState::Receiving;
+        g_ota_pct = 0;
+        g_ota_written = 0;
+        snprintf(g_ota_msg, sizeof(g_ota_msg), "starting");
+        if (strstr(up.filename.c_str(), "factory")) {
+            g_ota_state = OtaState::Fail;
+            snprintf(g_ota_msg, sizeof(g_ota_msg), "use firmware.bin");
+        } else if (up.totalSize > 0 && up.totalSize > 0x5C0000UL) {
+            g_ota_state = OtaState::Fail;
+            snprintf(g_ota_msg, sizeof(g_ota_msg), "file too big");
+        } else if (!Update.begin(0x5C0000UL)) {
+            g_ota_state = OtaState::Fail;
+            snprintf(g_ota_msg, sizeof(g_ota_msg), "begin fail");
+        }
+    } else if (up.status == UPLOAD_FILE_WRITE) {
+        if (g_ota_state == OtaState::Receiving) {
+            if (Update.write(up.buf, up.currentSize) != up.currentSize) {
+                g_ota_state = OtaState::Fail;
+                snprintf(g_ota_msg, sizeof(g_ota_msg), "write fail");
+            } else {
+                g_ota_written += up.currentSize;
+                if (up.totalSize > 0)
+                    g_ota_pct = (int)((g_ota_written * 100UL) / up.totalSize);
+            }
+        }
+    } else if (up.status == UPLOAD_FILE_END) {
+        if (g_ota_state == OtaState::Receiving && Update.end(true)) {
+            g_ota_state = OtaState::Ok;
+            g_ota_pct = 100;
+            snprintf(g_ota_msg, sizeof(g_ota_msg), "ok");
+        } else if (g_ota_state != OtaState::Fail) {
+            g_ota_state = OtaState::Fail;
+            snprintf(g_ota_msg, sizeof(g_ota_msg), "end fail");
+        }
+    } else if (up.status == UPLOAD_FILE_ABORTED) {
+        Update.abort();
+        g_ota_state = OtaState::Fail;
+        snprintf(g_ota_msg, sizeof(g_ota_msg), "aborted");
+    }
+}
+
 static void register_http_routes_once(void)
 {
     if (g_routes_ready)
         return;
     g_server.on("/",            HTTP_GET, on_root);
     g_server.on("/index.html",  HTTP_GET, on_root);
+    g_server.on("/update",      HTTP_GET, on_update_get);
+    g_server.on("/update",      HTTP_POST, on_update_done, on_update_upload);
     g_server.on("/api/status",  HTTP_GET, send_status_json);
     g_server.on("/api/files",   HTTP_GET, send_files_json);
     g_server.on("/api/points",  HTTP_GET, send_points_json);
@@ -352,6 +450,18 @@ bool start(const char* ssid, const char* password, const Callbacks& cb)
 {
     if (g_running) return true;
     g_cb = cb;
+    g_err[0] = '\0';
+
+#if defined(MM1_BOARD_P4)
+    /* Never touch WiFi.mode() unless the C6 slave FW answered at boot.
+     * hostedIsInitialized() can be true after a failed RPC; softAP then
+     * resets the P4. */
+    if (!sap6_ble_c6_ready()) {
+        snprintf(g_err, sizeof(g_err), "C6 offline — AP disabled");
+        g_cb = {};
+        return false;
+    }
+#endif
 
     register_http_routes_once();
 
@@ -359,10 +469,13 @@ bool start(const char* ssid, const char* password, const Callbacks& cb)
     WiFi.setAutoReconnect(false);
 
     delay(80);
+#if !defined(MM1_BOARD_P4)
     (void)esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
+#endif
 
     /* AP+STA keeps BLE stack alive (WIFI_AP alone can break coexistence). */
     if (!WiFi.mode(WIFI_AP_STA)) {
+        snprintf(g_err, sizeof(g_err), "Wi-Fi mode failed");
         g_cb = {};
         return false;
     }
@@ -381,9 +494,13 @@ bool start(const char* ssid, const char* password, const Callbacks& cb)
         ok = WiFi.softAP(ssid, pw_arg, (uint8_t)1, 0, kMaxClients); /* fallback channel */
 
     if (!ok) {
+        snprintf(g_err, sizeof(g_err), "softAP failed");
         WiFi.softAPdisconnect(true);
         delay(40);
+        /* Do not WiFi.mode(OFF) on P4 — Hosted teardown can reset the SoC. */
+#if !defined(MM1_BOARD_P4)
         WiFi.mode(WIFI_OFF);
+#endif
         g_cb = {};
         return false;
     }
@@ -405,7 +522,10 @@ void stop()
     g_server.stop();
     WiFi.softAPdisconnect(true);
     delay(80);
+    /* P4: WiFi.mode(OFF) tears down Hosted and can reset the SoC. */
+#if !defined(MM1_BOARD_P4)
     WiFi.mode(WIFI_OFF);
+#endif
     g_running = false;
     g_cb = {};
     g_ip[0] = '0';
@@ -415,6 +535,11 @@ void stop()
 bool        running()   { return g_running; }
 uint8_t     clients()   { return g_running ? WiFi.softAPgetStationNum() : 0; }
 const char* ap_ip()     { return g_ip; }
+const char* last_error(){ return g_err; }
+
+OtaState    ota_state()   { return g_ota_state; }
+int         ota_percent() { return g_ota_pct; }
+const char *ota_message() { return g_ota_msg; }
 
 void loop()             { if (g_running) g_server.handleClient(); }
 

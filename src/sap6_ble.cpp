@@ -9,15 +9,21 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <esp_wifi.h>
-#include <esp_bt.h>
-#include <esp32-hal-bt.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
-#include <esp_gap_ble_api.h>
+#include <cstdio>
 #include <cstring>
+
+#if defined(MM1_BOARD_P4)
+#include "esp32-hal-hosted.h"
+#else
+#include <esp_wifi.h>
+#include <esp_bt.h>
+#include <esp32-hal-bt.h>
+#include <esp_gap_ble_api.h>
+#endif
 
 #ifndef SAP6_BLE_DEVICE_NAME
 #define SAP6_BLE_DEVICE_NAME "SAP6_0001"
@@ -41,6 +47,7 @@ struct Sap6QueuedLeg {
 static BLEServer *g_server = nullptr;
 static BLECharacteristic *g_leg_char = nullptr;
 static bool g_stack_ready = false;
+static bool g_c6_ready = false;
 static bool g_connected = false;
 
 static Sap6QueuedLeg g_queue[kQueueMax];
@@ -170,16 +177,28 @@ class Sap6ServerCallbacks : public BLEServerCallbacks {
 class Sap6CmdCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *ch) override
     {
-        std::string v = ch->getValue();
-        for (size_t i = 0; i < v.size(); i++)
-            handle_command_byte((uint8_t)v[i]);
+#if defined(MM1_BOARD_P4)
+        const String v = ch->getValue();
+        const size_t n = (size_t)v.length();
+        const char *p = v.c_str();
+#else
+        const std::string v = ch->getValue();
+        const size_t n = v.size();
+        const char *p = v.data();
+#endif
+        for (size_t i = 0; i < n; i++)
+            handle_command_byte((uint8_t)p[i]);
     }
 };
 
 static void sap6_ble_radio_quiet(void)
 {
+#if defined(MM1_BOARD_P4)
+    /* C6 Hosted keeps Wi-Fi + BLE together — do not stop Wi-Fi here. */
+#else
     WiFi.mode(WIFI_OFF);
     esp_wifi_stop();
+#endif
 }
 
 static void sap6_ble_configure_advertising(const char *device_name)
@@ -189,10 +208,15 @@ static void sap6_ble_configure_advertising(const char *device_name)
     strncpy(g_adv_name, device_name, sizeof(g_adv_name) - 1);
     g_adv_name[sizeof(g_adv_name) - 1] = '\0';
 
+#if !defined(MM1_BOARD_P4)
     if (!btStarted())
         return;
 
     esp_ble_gap_set_device_name(g_adv_name);
+#else
+    if (!BLEDevice::getInitialized())
+        return;
+#endif
 
     /*
      * Padrao ESP32 BLE server (visivel no nRF): UUID no ADV, nome no scan response.
@@ -245,7 +269,11 @@ void sap6_ble_begin(const char *device_name)
     if (!device_name || !device_name[0])
         device_name = SAP6_BLE_DEVICE_NAME;
 
+#if defined(MM1_BOARD_P4)
+    if (g_stack_ready && g_server && BLEDevice::getInitialized()) {
+#else
     if (g_stack_ready && g_server && btStarted()) {
+#endif
         sap6_ble_configure_advertising(device_name);
         return;
     }
@@ -256,6 +284,16 @@ void sap6_ble_begin(const char *device_name)
 
     sap6_ble_radio_quiet();
 
+#if defined(MM1_BOARD_P4)
+    /* Waveshare 4.3: C6 SDIO CLK18 CMD19 D0=14 D1=15 D2=16 D3=17 RST=54. */
+    hostedSetPins(18, 19, 14, 15, 16, 17, 54);
+    if (!BLEDevice::getInitialized()) {
+        BLEDevice::init(device_name);
+    }
+    if (!BLEDevice::getInitialized()) {
+        return;
+    }
+#else
     if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_IDLE) {
         esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
     }
@@ -277,13 +315,20 @@ void sap6_ble_begin(const char *device_name)
     esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_P9);
     esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_SCAN, ESP_PWR_LVL_P9);
     esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, ESP_PWR_LVL_P9);
+#endif
 
     if (!sap6_ble_create_gatt_server()) {
         return;
     }
 
     sap6_ble_configure_advertising(device_name);
+#if defined(MM1_BOARD_P4)
+    g_stack_ready = BLEDevice::getInitialized();
+    sap6_ble_c6_refresh();
+#else
     g_stack_ready = btStarted();
+    g_c6_ready = true;
+#endif
 }
 
 void sap6_ble_restart(const char *device_name)
@@ -297,8 +342,10 @@ void sap6_ble_restart(const char *device_name)
     if (BLEDevice::getInitialized()) {
         BLEDevice::stopAdvertising();
         BLEDevice::deinit(true);
+#if !defined(MM1_BOARD_P4)
     } else if (btStarted()) {
         btStop();
+#endif
     }
 
     g_server = nullptr;
@@ -345,27 +392,123 @@ void sap6_ble_poll(void)
     }
 }
 
-bool sap6_ble_stack_ready(void) { return g_stack_ready && btStarted(); }
+bool sap6_ble_stack_ready(void)
+{
+#if defined(MM1_BOARD_P4)
+    return g_stack_ready && BLEDevice::getInitialized();
+#else
+    return g_stack_ready && btStarted();
+#endif
+}
+
+bool sap6_ble_c6_ready(void)
+{
+#if defined(MM1_BOARD_P4)
+    return g_c6_ready;
+#else
+    return true;
+#endif
+}
+
+#if defined(MM1_BOARD_P4)
+static bool sap6_ble_mac_alive(void)
+{
+    if (!BLEDevice::getInitialized())
+        return false;
+    const String a = BLEDevice::getAddress().toString();
+    unsigned b[6] = {};
+    if (sscanf(a.c_str(), "%x:%x:%x:%x:%x:%x",
+               &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]) != 6)
+        return false;
+    return (b[0] | b[1] | b[2] | b[3] | b[4] | b[5]) != 0;
+}
+#endif
+
+bool sap6_ble_c6_refresh(void)
+{
+#if defined(MM1_BOARD_P4)
+    uint32_t maj = 0, min = 0, pat = 0;
+    const bool hosted = hostedIsInitialized();
+    if (hosted)
+        hostedGetSlaveVersion(&maj, &min, &pat);
+    const bool fw_ok = (maj | min | pat) != 0;
+    const bool mac_ok = sap6_ble_mac_alive();
+    /* Version RPC often stays 0.0.0 even when the C6 BLE link is up.
+     * A real BLE MAC is enough to allow SoftAP; both-zero still blocks
+     * WiFi.mode() (that path resets the P4 when the slave is dead). */
+    g_c6_ready = fw_ok || mac_ok;
+    Serial.printf("[C6] ready=%d hosted=%d fw=%u.%u.%u ble_mac=%d\n",
+                  (int)g_c6_ready, (int)hosted,
+                  (unsigned)maj, (unsigned)min, (unsigned)pat, (int)mac_ok);
+    return g_c6_ready;
+#else
+    g_c6_ready = true;
+    return true;
+#endif
+}
 bool sap6_ble_connected(void) { return g_connected; }
+
+static bool sap6_format_mac6(char *buf, size_t len, const unsigned *b)
+{
+    if (!buf || len < 18 || !b)
+        return false;
+    if ((b[0] | b[1] | b[2] | b[3] | b[4] | b[5]) == 0)
+        return false;
+    snprintf(buf, len, "%02X:%02X:%02X:%02X:%02X:%02X",
+             b[0], b[1], b[2], b[3], b[4], b[5]);
+    return true;
+}
 
 void sap6_ble_get_mac_str(char *buf, size_t len)
 {
-    if (!buf || len < 18) return;
-    uint64_t mac = ESP.getEfuseMac();
-    snprintf(buf, len, "%02X:%02X:%02X:%02X:%02X:%02X",
-             (unsigned)((mac >> 40) & 0xff), (unsigned)((mac >> 32) & 0xff),
-             (unsigned)((mac >> 24) & 0xff), (unsigned)((mac >> 16) & 0xff),
-             (unsigned)((mac >> 8) & 0xff), (unsigned)(mac & 0xff));
+    if (!buf || len < 18)
+        return;
+    buf[0] = '\0';
+
+    /* Phone sees the BLE advertiser address — not WiFi.macAddress()
+     * (that is 00:00:00:00:00:00 on P4 until the C6 Hosted link is up). */
+    if (BLEDevice::getInitialized()) {
+        const String a = BLEDevice::getAddress().toString();
+        unsigned b[6] = {};
+        if (sscanf(a.c_str(), "%x:%x:%x:%x:%x:%x",
+                   &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]) == 6 &&
+            sap6_format_mac6(buf, len, b))
+            return;
+    }
+
+#if defined(MM1_BOARD_P4)
+    snprintf(buf, len, "C6 offline");
+#else
+    const uint64_t mac = ESP.getEfuseMac();
+    const unsigned b[6] = {
+        (unsigned)((mac >> 40) & 0xff), (unsigned)((mac >> 32) & 0xff),
+        (unsigned)((mac >> 24) & 0xff), (unsigned)((mac >> 16) & 0xff),
+        (unsigned)((mac >> 8) & 0xff),  (unsigned)(mac & 0xff),
+    };
+    if (!sap6_format_mac6(buf, len, b))
+        snprintf(buf, len, "-");
+#endif
 }
 
 void sap6_ble_format_status(char *buf, size_t len)
 {
     if (!buf || len < 8)
         return;
+#if defined(MM1_BOARD_P4)
+    uint32_t maj = 0, min = 0, pat = 0;
+    if (hostedIsInitialized())
+        hostedGetSlaveVersion(&maj, &min, &pat);
+    snprintf(buf, len, "C6 %s  BLE %s  fw %u.%u.%u  heap %u",
+             hostedIsInitialized() ? "OK" : "NO",
+             g_stack_ready ? "OK" : "OFF",
+             (unsigned)maj, (unsigned)min, (unsigned)pat,
+             (unsigned)ESP.getFreeHeap());
+#else
     snprintf(buf, len, "BT ctrl %d  stack %s  heap %u",
              (int)esp_bt_controller_get_status(),
              (g_stack_ready && btStarted()) ? "OK" : "OFF",
              (unsigned)ESP.getFreeHeap());
+#endif
 }
 
 bool sap6_ble_try_send_leg(float azimuth_deg, float inclination_deg, float roll_deg,
@@ -447,6 +590,9 @@ void sap6_ble_stream_progress(int *queued_idx, int *total)
 
 void sap6_ble_clear_bonds(void)
 {
+#if defined(MM1_BOARD_P4)
+    /* NimBLE on Hosted starts with bonding off; nothing to wipe. */
+#else
     int dev_num = esp_ble_get_bond_device_num();
     if (dev_num <= 0)
         return;
@@ -457,6 +603,7 @@ void sap6_ble_clear_bonds(void)
         for (int i = 0; i < dev_num; i++)
             esp_ble_remove_bond_device(list[i].bd_addr);
     }
+#endif
 }
 
 uint32_t sap6_ble_legs_sent(void) { return g_legs_sent; }

@@ -164,7 +164,7 @@
 #define LV_FONT_MONTSERRAT_18 0
 #define LV_FONT_MONTSERRAT_20 1
 #define LV_FONT_MONTSERRAT_22 0
-#define LV_FONT_MONTSERRAT_24 0
+#define LV_FONT_MONTSERRAT_24 1
 #define LV_FONT_MONTSERRAT_26 0
 #define LV_FONT_MONTSERRAT_28 0
 #define LV_FONT_MONTSERRAT_30 0
@@ -185,7 +185,11 @@
 #define LV_FONT_UNSCII_8                 0
 #define LV_FONT_UNSCII_16                0
 #define LV_FONT_CUSTOM_DECLARE
+#if defined(MM1_BOARD_P4)
+#define LV_FONT_DEFAULT &lv_font_montserrat_20
+#else
 #define LV_FONT_DEFAULT &lv_font_montserrat_14
+#endif
 #define LV_FONT_FMT_TXT_LARGE    0
 #define LV_USE_FONT_COMPRESSED   0
 #define LV_USE_FONT_SUBPX        0
@@ -223,7 +227,10 @@
 #define LV_USE_ROLLER    0
 #define LV_USE_SLIDER    1
 #define LV_USE_SWITCH    0
-#define LV_USE_TEXTAREA  0
+#define LV_USE_TEXTAREA  1
+#if LV_USE_TEXTAREA
+    #define LV_TEXTAREA_DEF_PWD_SHOW_TIME 1500
+#endif
 #define LV_USE_TABLE     1
 
 /*==================
@@ -234,7 +241,7 @@
 #define LV_USE_CHART     0
 #define LV_USE_COLORWHEEL 0
 #define LV_USE_IMGBTN    0
-#define LV_USE_KEYBOARD  0
+#define LV_USE_KEYBOARD  1
 #define LV_USE_LED       0
 #define LV_USE_LIST      0
 #define LV_USE_MENU      0

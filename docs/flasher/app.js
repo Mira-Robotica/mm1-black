@@ -1,24 +1,46 @@
 /**
  * MM1-BLACK — USB installer (Web Serial + esptool-js). MIRA.
  * Release metadata from GitHub API; .bin served from ./bins/ (same origin).
+ * Device Wi-Fi OTA uses the same files via ./latest.json.
  */
 
 const REPO = "verlab/mm1-black";
-const BIN_PREFIX = "MM1-BLACK-denky32-";
-const FLASH_ADDR = 0x10000;
-const VERSION_BAUD = 9600;
 const DEFAULT_FLASH_BAUD = 115200;
 const CONNECT_TIMEOUT_MS = 22000;
 
-const USB_PORT_FILTERS = [{ usbVendorId: 0x1a86 }];
+const BOARDS = {
+  denky32: {
+    id: "denky32",
+    prefix: "MM1-BLACK-denky32-",
+    flashAddr: 0x10000,
+    flashSize: "4MB",
+    flashFreq: "40m",
+    versionBaud: 9600,
+    filters: [{ usbVendorId: 0x1a86 }],
+  },
+  mm1_p4: {
+    id: "mm1_p4",
+    prefix: "MM1-BLACK-mm1_p4-",
+    flashAddr: 0x10000,
+    flashSize: "32MB",
+    flashFreq: "80m",
+    versionBaud: 115200,
+    filters: [
+      { usbVendorId: 0x1a86, usbProductId: 0x55d3 },
+      { usbVendorId: 0x1a86 },
+    ],
+  },
+};
 
 const USB_ADAPTER_NAMES = {
   "1a86:7523": "WCH CH340",
   "1a86:5523": "WCH CH341 serial",
+  "1a86:55d3": "QinHeng USB TO UART (P4)",
   "10c4:ea60": "Silicon Labs CP210x",
   "0403:6001": "FTDI FT232",
 };
 
+let selectedBoard = "denky32";
 let selectedPort = null;
 let releases = [];
 let deviceVersion = null;
@@ -28,6 +50,10 @@ const $ = (id) => document.getElementById(id);
 const logEl = $("log");
 const progressWrap = $("progressWrap");
 const progressBar = $("progressBar");
+
+function board() {
+  return BOARDS[selectedBoard] || BOARDS.denky32;
+}
 
 function log(msg) {
   const t = new Date().toLocaleTimeString();
@@ -146,7 +172,7 @@ async function hardResetEsp32(port, baud = 115200) {
 }
 
 async function rebootAfterFlash(port, loader, transport, baud) {
-  log("Resetting ESP32…");
+  log("Resetting MCU…");
   try {
     if (loader.IS_STUB) await loader.flashDeflFinish(true);
   } catch (e) {
@@ -217,6 +243,12 @@ function updateUI() {
         cmp.innerHTML =
           '<span class="compare-older">Device is newer than selected build.</span>';
       else cmp.textContent = "Device matches selected release.";
+      const canInstall =
+        releases.length > 0 &&
+        $("releaseSelect").value &&
+        $("ackFlash").checked &&
+        "serial" in navigator;
+      $("btnInstall").disabled = !canInstall;
       return;
     }
   }
@@ -234,37 +266,56 @@ function localBinUrl(fileName) {
   return new URL(`bins/${fileName}`, window.location.href).href;
 }
 
-async function fetchReleases() {
-  const sel = $("releaseSelect");
-  sel.innerHTML = '<option value="">Loading…</option>';
-  sel.disabled = true;
-  setStatus("Loading releases…");
-  releases = [];
+function applyBoardChrome() {
+  const p4 = selectedBoard === "mm1_p4";
+  const hint = $("p4Hint");
+  if (hint) hint.classList.toggle("hidden", !p4);
+  $("btnBoardCyd").classList.toggle("active", !p4);
+  $("btnBoardP4").classList.toggle("active", p4);
+  try {
+    localStorage.setItem("mm1-board", selectedBoard);
+  } catch (_) {}
+}
 
+function setBoard(id, reload) {
+  if (!BOARDS[id]) id = "denky32";
+  selectedBoard = id;
+  applyBoardChrome();
+  if (reload) {
+    deviceVersion = null;
+    $("deviceVersion").textContent = "—";
+    fetchReleases().catch((e) => {
+      log(`Releases: ${e.message}`);
+      setStatus(e.message, "err");
+    });
+  }
+}
+
+function pickAsset(rel, prefix) {
+  return (rel.assets || []).find(
+    (a) => a.name.startsWith(prefix) && a.name.endsWith(".bin") && !a.name.includes("sha256")
+  );
+}
+
+async function fetchReleasesFromApi() {
+  const prefix = board().prefix;
   const res = await fetch(`https://api.github.com/repos/${REPO}/releases`, {
     headers: { Accept: "application/vnd.github+json" },
   });
-
   if (res.status === 404) {
-    sel.innerHTML = '<option value="">Repository not accessible</option>';
-    setStatus("Cannot load releases — check that the repo is public.", "err");
-    updateUI();
-    return;
+    throw new Error("Repository not accessible");
   }
-
   if (!res.ok) {
     throw new Error(`GitHub API HTTP ${res.status}`);
   }
-
   const data = await res.json();
+  const out = [];
   for (const rel of data) {
     if (rel.draft || rel.prerelease) continue;
     const tag = rel.tag_name || rel.name;
-    const asset = (rel.assets || []).find(
-      (a) => a.name.startsWith(BIN_PREFIX) && a.name.endsWith(".bin")
-    );
+    const asset = pickAsset(rel, prefix);
     if (!asset) continue;
-    releases.push({
+    out.push({
       tag,
       name: rel.name || tag,
       fileName: asset.name,
@@ -272,12 +323,59 @@ async function fetchReleases() {
       size: asset.size,
     });
   }
+  return out;
+}
+
+async function fetchReleasesFromManifest() {
+  const res = await fetch(new URL("latest.json", window.location.href).href, {
+    cache: "no-store",
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+  const rec = data[selectedBoard];
+  if (!rec || !rec.file) return [];
+  const fileName = String(rec.file).split("/").pop();
+  return [
+    {
+      tag: rec.tag,
+      name: rec.tag,
+      fileName,
+      url: new URL(rec.file, window.location.href).href,
+      size: rec.size || 0,
+    },
+  ];
+}
+
+async function fetchReleases() {
+  const sel = $("releaseSelect");
+  sel.innerHTML = '<option value="">Loading…</option>';
+  sel.disabled = true;
+  setStatus("Loading releases…");
+  releases = [];
+
+  try {
+    releases = await fetchReleasesFromApi();
+  } catch (e) {
+    log(`GitHub API: ${e.message}`);
+    releases = [];
+  }
+
+  if (!releases.length) {
+    try {
+      releases = await fetchReleasesFromManifest();
+      if (releases.length) log("Using latest.json from this site.");
+    } catch (e) {
+      log(`latest.json: ${e.message}`);
+    }
+  }
 
   sel.innerHTML = "";
   if (!releases.length) {
-    sel.innerHTML =
-      '<option value="">No MM1-BLACK-denky32-*.bin on Releases yet</option>';
-    setStatus("No firmware on Releases. Tag v* and re-run Pages deploy.", "err");
+    sel.innerHTML = `<option value="">No ${board().prefix}*.bin yet</option>`;
+    setStatus(
+      `No ${selectedBoard} firmware on Releases yet. Tag a v* build or use SETUP → WiFi after the first USB flash.`,
+      "err"
+    );
     updateUI();
     return;
   }
@@ -285,12 +383,13 @@ async function fetchReleases() {
   for (const r of releases) {
     const opt = document.createElement("option");
     opt.value = r.tag;
-    opt.textContent = `${r.tag} (${(r.size / 1024).toFixed(0)} KB)`;
+    const kb = r.size ? ` (${(r.size / 1024).toFixed(0)} KB)` : "";
+    opt.textContent = `${r.tag}${kb}`;
     sel.appendChild(opt);
   }
   sel.disabled = false;
-  setStatus(`${releases.length} release(s) ready.`, "ok");
-  log(`Loaded ${releases.length} release(s).`);
+  setStatus(`${releases.length} release(s) for ${selectedBoard}.`, "ok");
+  log(`Loaded ${releases.length} release(s) (${selectedBoard}).`);
   updateUI();
 }
 
@@ -298,7 +397,7 @@ async function readVersionFromPort(port) {
   let reader;
   let writer;
   try {
-    await port.open({ baudRate: VERSION_BAUD });
+    await port.open({ baudRate: board().versionBaud });
     await new Promise((r) => setTimeout(r, 300));
     writer = port.writable.getWriter();
     reader = port.readable.getReader();
@@ -334,7 +433,7 @@ async function requestPort() {
   setStatus("Choose the USB serial port…");
   try {
     selectedPort = await navigator.serial.requestPort({
-      filters: USB_PORT_FILTERS,
+      filters: board().filters,
     });
   } catch (e) {
     if (e.name === "NotFoundError") throw e;
@@ -355,7 +454,7 @@ async function readInstalledVersion() {
       log(`Installed: ${deviceVersion}`);
       setStatus(`Installed firmware: ${deviceVersion}`, "ok");
     } else {
-      log("No VERSION response (wrong port or device busy).");
+      log("No VERSION response (wrong port, baud, or device busy).");
       setStatus("Version not read — you can still install.", "ok");
     }
     updateUI();
@@ -372,9 +471,8 @@ async function readInstalledVersion() {
 async function loadEsptool() {
   if (!esptoolModule) {
     log("Loading esptool-js…");
-    /* 0.6.x expects Uint8Array for writeFlash; 0.5.x compress path breaks on binary buffers. */
     esptoolModule = await import(
-      "https://cdn.jsdelivr.net/npm/esptool-js@0.6.0/+esm"
+      "https://cdn.jsdelivr.net/npm/esptool-js@0.6.1/+esm"
     );
   }
   return esptoolModule;
@@ -488,6 +586,7 @@ async function installFirmware() {
   }
 
   const baud = flashBaud();
+  const cfg = board();
   $("btnInstall").disabled = true;
   $("btnReadVersion").disabled = true;
   setProgress(0);
@@ -507,9 +606,9 @@ async function installFirmware() {
     selectedPort = null;
     const port = await requestPort();
     log(`Port: ${usbAdapterName(port)}`);
-    log(`Flashing ${rel.tag} @ ${baud} baud…`);
+    log(`Flashing ${rel.tag} @ ${baud} baud (${cfg.flashSize})…`);
 
-    setStatus("Connecting to ESP32 bootloader…");
+    setStatus("Connecting to bootloader…");
     const { loader, transport, chip } = await connectLoader(
       port,
       baud,
@@ -519,10 +618,10 @@ async function installFirmware() {
 
     setStatus("Writing flash… do not unplug USB.");
     await loader.writeFlash({
-      fileArray: [{ data: firmware, address: FLASH_ADDR }],
+      fileArray: [{ data: firmware, address: cfg.flashAddr }],
       flashMode: "dio",
-      flashFreq: "40m",
-      flashSize: "4MB",
+      flashFreq: cfg.flashFreq,
+      flashSize: cfg.flashSize,
       eraseAll: false,
       compress: true,
       reportProgress: (_idx, written, total) => {
@@ -552,11 +651,29 @@ async function installFirmware() {
   }
 }
 
+function initBoardFromUrl() {
+  const q = new URLSearchParams(window.location.search).get("board");
+  if (q === "p4" || q === "mm1_p4") return "mm1_p4";
+  if (q === "cyd" || q === "denky32") return "denky32";
+  try {
+    const saved = localStorage.getItem("mm1-board");
+    if (saved && BOARDS[saved]) return saved;
+  } catch (_) {}
+  return "denky32";
+}
+
 function init() {
+  selectedBoard = initBoardFromUrl();
+  applyBoardChrome();
+
+  $("btnBoardCyd").addEventListener("click", () => setBoard("denky32", true));
+  $("btnBoardP4").addEventListener("click", () => setBoard("mm1_p4", true));
+
   if (!("serial" in navigator)) {
     $("noSerial").classList.remove("hidden");
     $("btnInstall").disabled = true;
     $("btnReadVersion").disabled = true;
+    fetchReleases().catch(() => {});
     return;
   }
 
