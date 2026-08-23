@@ -50,10 +50,10 @@
 #include <cinttypes>
 #include <esp_log.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 #if !defined(MM1_BOARD_P4)
 #include <esp_gap_ble_api.h>
 #include <WebServer.h>
-#include <esp_wifi.h>
 #include <esp_coexist.h>
 #include "esp32-hal-ledc.h"
 #endif
@@ -549,7 +549,11 @@ static char                  g_bt_local_mac[18]  = {0};   // device MAC (filled 
 #define WIFI_AP_PASS  "mira-mm1"   /* must be 8+ chars or empty for open AP */
 #endif
 #ifndef FW_VERSION_STR
+#ifdef FW_VERSION
+#define FW_VERSION_STR FW_VERSION
+#else
 #define FW_VERSION_STR "0.4.x"
+#endif
 #endif
 enum WifiJob : uint8_t { WIFI_JOB_NONE = 0, WIFI_JOB_AP, WIFI_JOB_STA, WIFI_JOB_SCAN };
 static bool                  g_wifi_user_on      = false;
@@ -557,7 +561,9 @@ static WifiJob               g_wifi_job          = WIFI_JOB_NONE;
 static unsigned long         g_wifi_job_at       = 0;
 static unsigned long         g_wifi_sta_begin_at = 0;
 static unsigned long         g_wifi_last_check   = 0;
+static unsigned long         g_wifi_check_due    = 0;
 static bool                  g_wifi_sta_wait     = false;
+static bool                  g_ota_boot_ok       = false;
 static char                  g_wifi_ap_note[96]  = "";
 static char                  g_sta_ssid[33]      = "";
 static char                  g_sta_pass[65]      = "";
@@ -661,6 +667,8 @@ static lv_obj_t *ui_lbl_setup_vol     = nullptr;
 static lv_obj_t *ui_slider_vol        = nullptr;
 static lv_obj_t *ui_lbl_setup_ver     = nullptr;
 static lv_obj_t *ui_lbl_setup_wifi    = nullptr;
+static lv_obj_t *ui_lbl_fw_notify     = nullptr;
+static lv_obj_t *ui_lbl_about_fw      = nullptr;
 static lv_obj_t *ui_btn_wifi_off      = nullptr;
 static lv_obj_t *ui_btn_wifi_join     = nullptr;
 static lv_obj_t *ui_btn_wifi_scan     = nullptr;
@@ -1732,14 +1740,38 @@ static void bat_adc_init(void)
 #if defined(ARDUINO_ARCH_ESP32)
     if (BAT_ADC_PIN < 0)
         return;
+    analogReadResolution(12);
+    analogSetAttenuation(ADC_11db);
     analogSetPinAttenuation(BAT_ADC_PIN, ADC_11db);
 #endif
+}
+
+/** 1S LiPo SoC from pack voltage (resting / light load). */
+static int bat_v_to_pct(float v)
+{
+    static const float kv[] = { 3.20f, 3.50f, 3.62f, 3.70f, 3.76f,
+                                3.82f, 3.87f, 3.93f, 4.00f, 4.10f, 4.20f };
+    static const int   kp[] = {    0,    5,   10,   20,   30,
+                                  40,   50,   60,   75,   90,  100 };
+    const int n = (int)(sizeof(kp) / sizeof(kp[0]));
+    if (v <= kv[0])
+        return 0;
+    if (v >= kv[n - 1])
+        return 100;
+    for (int i = 1; i < n; i++) {
+        if (v <= kv[i]) {
+            const float t = (v - kv[i - 1]) / (kv[i] - kv[i - 1]);
+            return constrain((int)lroundf(kp[i - 1] + t * (kp[i] - kp[i - 1])), 0, 100);
+        }
+    }
+    return 100;
 }
 
 static void read_battery()
 {
     if (BAT_ADC_PIN < 0) {
         bat_pct = -1;
+        g_bat_v = NAN;
         return;
     }
 #ifdef ARDUINO_ARCH_ESP32
@@ -1753,38 +1785,46 @@ static void read_battery()
     const int raw    = acc_raw / 8;
     const int pin_mv = acc_mv / 8;
 #if defined(MM1_BOARD_P4)
-    const float div = MM1_BAT_DIVIDER;
-    /* P4 eFuse ADC cali is often missing — use 11 dB raw scale (~3.1 V FS). */
-    float vpin = (raw / 4095.0f) * 3.10f;
-    (void)pin_mv;
+    const float div = MM1_BAT_DIVIDER; /* R12 200k / R15 100k → Vbat/3 */
 #else
     const float div = 2.0f;
-    float vpin = pin_mv / 1000.0f;
-    if (vpin < 0.05f)
-        vpin = (raw / 4095.0f) * 3.3f;
 #endif
     if (raw < 80 && pin_mv < 180) {
         bat_pct = -1;
+        g_bat_v = NAN;
         return;
     }
-    const float v = vpin * div;
+    /* analogRead() on P4 is often low; analogReadMilliVolts() uses the cal curve. */
+    const float v_mv  = (pin_mv / 1000.0f) * div;
+    const float v_raw = (raw / 4095.0f) * 3.30f * div;
+    float v;
+    if (pin_mv >= 700 && pin_mv <= 2300) {
+        v = v_mv;
+        /* Dummy eFuse cali can stick near 1.1 V; raw then looks like a healthier pack. */
+        if (v_mv < 3.55f && v_raw > 3.70f && v_raw < 4.55f)
+            v = v_raw;
+    } else {
+        v = v_raw;
+    }
     g_bat_v = v;
 #if !LZR_SHARE_USB_UART
     static bool bat_logged;
     if (!bat_logged) {
         bat_logged = true;
-        DBG_PRINT("[BAT] raw=%d  pin=%d mV  Vbat=%.2f\n", raw, pin_mv, (double)v);
+        DBG_PRINT("[BAT] raw=%d  pin=%d mV  Vbat=%.2f  %d%%\n",
+                  raw, pin_mv, (double)v, bat_v_to_pct(v));
     }
 #endif
     if (v < 2.6f || v > 4.6f) {
         bat_pct = -1;
         return;
     }
-    bat_pct = constrain((int)((v - 3.0f) / (4.2f - 3.0f) * 100.0f), 0, 100);
+    bat_pct = bat_v_to_pct(v);
 #else
     int raw = analogRead(BAT_ADC_PIN);
     float v = raw * 3.3f / 4095.0f * 2.0f;
-    bat_pct = constrain((int)((v - 3.0f) / (4.2f - 3.0f) * 100.0f), 0, 100);
+    g_bat_v = v;
+    bat_pct = bat_v_to_pct(v);
 #endif
 }
 
@@ -2443,6 +2483,7 @@ static void view_prof_draw_cb(lv_event_t *e)
 static void refresh_sensor_display()
 {
     read_device_temp_c();
+    read_battery();
     char buf[128];
     if (ui_lbl_tof_val) {
         const float used = laser_used_m();
@@ -2516,10 +2557,18 @@ static void refresh_sensor_display()
         }
     }
     if (ui_lbl_sens_temp) {
-        if (isfinite(g_live_temp_c))
+        if (isfinite(g_live_temp_c) && isfinite(g_bat_v))
             snprintf(buf, sizeof(buf),
-                     UI_TALL ? "%.1f C\nESP32 MCU" : "%.1f C  (ESP32 MCU)",
+                     UI_TALL ? "%.1f C\n%.2f V" : "%.1f C   %.2f V",
+                     (double)g_live_temp_c, (double)g_bat_v);
+        else if (isfinite(g_live_temp_c))
+            snprintf(buf, sizeof(buf),
+                     UI_TALL ? "%.1f C\n-- V" : "%.1f C   -- V",
                      (double)g_live_temp_c);
+        else if (isfinite(g_bat_v))
+            snprintf(buf, sizeof(buf),
+                     UI_TALL ? "-- C\n%.2f V" : "-- C   %.2f V",
+                     (double)g_bat_v);
         else
             strlcpy(buf, UI_NA, sizeof(buf));
         lv_label_set_text(ui_lbl_sens_temp, buf);
@@ -3577,7 +3626,7 @@ static void web_get_status_cb(web_portal::Status& st)
     st.bt_local_mac  = g_bt_local_mac;
     st.bt_peer_mac   = g_bt_peer_mac;
     st.active_csv    = active_csv;
-    st.fw_version    = FW_VERSION_STR;
+    st.fw_version    = FW_VERSION;
 }
 
 namespace {
@@ -3787,12 +3836,36 @@ static void setup_wifi_ap_cb(lv_event_t *e)
     play_button_ack();
 }
 
+void mm1_on_serial_wifi_ap(void)
+{
+    if (web_portal::running() || g_wifi_job != WIFI_JOB_NONE)
+        return;
+    if (!wifi_radio_ok("AP"))
+        return;
+    g_wifi_sta_wait = false;
+    wifi_schedule(WIFI_JOB_AP, "Starting hotspot…");
+    set_fstatus("Wi-Fi starting");
+}
+
+void mm1_on_serial_wifi_join(void)
+{
+    if (!g_sta_ssid[0]) {
+        snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "No saved SSID");
+        return;
+    }
+    if (!wifi_radio_ok("Join"))
+        return;
+    wifi_schedule(WIFI_JOB_STA, "Joining…");
+    set_fstatus("Joining Wi-Fi");
+}
+
 static void setup_wifi_off_cb(lv_event_t *e)
 {
     (void)e;
     g_wifi_job = WIFI_JOB_NONE;
     g_wifi_job_at = 0;
     g_wifi_sta_wait = false;
+    g_wifi_check_due = 0;
     g_wifi_ap_note[0] = '\0';
     wifi_kb_hide();
     web_portal_disable();
@@ -3811,7 +3884,7 @@ static void setup_wifi_join_cb(lv_event_t *e)
     wifi_kb_hide();
     wifi_sync_creds_from_ui();
     if (!g_sta_ssid[0]) {
-        snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Enter SSID or Scan");
+        snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Scan or type a network name");
         refresh_setup_wifi_display();
         set_fstatus("SSID needed");
         play_button_ack();
@@ -3843,13 +3916,14 @@ static void setup_wifi_check_cb(lv_event_t *e)
 {
     (void)e;
     if (WiFi.status() != WL_CONNECTED) {
-        snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Join Wi-Fi first");
+        snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Join a network first");
         refresh_setup_wifi_display();
         set_fstatus("Join first");
         play_button_ack();
         return;
     }
-    snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Checking…");
+    fw_gh_ota_bind_sta();
+    snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Looking for updates…");
     refresh_setup_wifi_display();
     fw_gh_ota_request_check();
     play_button_ack();
@@ -3859,12 +3933,27 @@ static void setup_wifi_install_cb(lv_event_t *e)
 {
     (void)e;
     if (WiFi.status() != WL_CONNECTED) {
-        snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Join Wi-Fi first");
+        snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Join a network first");
         refresh_setup_wifi_display();
         play_button_ack();
         return;
     }
-    snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Installing… keep power");
+    if (bat_pct >= 0 && bat_pct < 20) {
+        snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Charge the tape before Install");
+        refresh_setup_wifi_display();
+        set_fstatus("Battery low");
+        play_button_ack();
+        return;
+    }
+    if (!fw_gh_ota_newer()) {
+        snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Tap Check first");
+        refresh_setup_wifi_display();
+        set_fstatus("Check first");
+        play_button_ack();
+        return;
+    }
+    fw_gh_ota_bind_sta();
+    snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Installing — keep the tape on");
     refresh_setup_wifi_display();
     lv_timer_handler();
     fw_gh_ota_request_install();
@@ -3887,8 +3976,8 @@ static void setup_wifi_net_cb(lv_event_t *e)
     if (ui_ta_wifi_ssid)
         lv_textarea_set_text(ui_ta_wifi_ssid, g_sta_ssid);
     prefs_save_sta_wifi();
-    snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "SSID %s — enter pass, Join",
-             g_sta_ssid);
+    snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note),
+             "Selected %s — type the password, then Join", g_sta_ssid);
     refresh_setup_wifi_display();
     play_button_ack();
 }
@@ -3899,21 +3988,30 @@ static void wifi_start_service(void)
         const wl_status_t st = WiFi.status();
         if (st == WL_CONNECTED) {
             g_wifi_sta_wait = false;
-            IPAddress ip = WiFi.localIP();
-            snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note),
-                     "Joined %s", g_sta_ssid);
-            Serial.printf("[WiFi] STA %s  IP %u.%u.%u.%u\n", g_sta_ssid,
-                          ip[0], ip[1], ip[2], ip[3]);
-            fw_gh_ota_request_check();
+            WiFi.setAutoReconnect(true);
+            WiFi.setSleep(false);
+            fw_gh_ota_bind_sta();
+            snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Connected");
+            Serial.printf("[WiFi] STA %s  IP %s\n",
+                          g_sta_ssid, WiFi.localIP().toString().c_str());
             g_wifi_last_check = millis();
+            g_wifi_check_due = millis() + 8000UL;
             refresh_setup_wifi_display();
-            set_fstatus("Wi-Fi joined");
+            set_fstatus("Connected");
         } else if (millis() - g_wifi_sta_begin_at > 18000UL) {
             g_wifi_sta_wait = false;
-            snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Join failed");
+            snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Could not join");
             refresh_setup_wifi_display();
             set_fstatus("Join failed");
         }
+    }
+
+    if (g_wifi_check_due && (long)(millis() - g_wifi_check_due) >= 0 &&
+        WiFi.status() == WL_CONNECTED && !fw_gh_ota_busy()) {
+        g_wifi_check_due = 0;
+        fw_gh_ota_bind_sta();
+        fw_gh_ota_request_check();
+        g_wifi_last_check = millis();
     }
 
     if (WiFi.status() == WL_CONNECTED && !fw_gh_ota_busy() &&
@@ -3941,7 +4039,7 @@ static void wifi_start_service(void)
                       (double)g_bat_v, bat_pct);
         const bool ok = web_portal_enable();
         if (ok)
-            snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Hotspot on");
+            snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "AP is on");
         else
             snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "AP failed: %s",
                      web_portal::last_error()[0] ? web_portal::last_error()
@@ -3949,19 +4047,28 @@ static void wifi_start_service(void)
         sap6_ble_get_mac_str(g_bt_local_mac, sizeof(g_bt_local_mac));
         refresh_setup_wifi_display();
         refresh_setup_bt_status();
-        set_fstatus(ok ? "Wi-Fi hotspot on" : g_wifi_ap_note);
+        set_fstatus(ok ? "AP on" : g_wifi_ap_note);
         return;
     }
 
-    web_portal_disable();
+    web_portal::stop_ap();
     WiFi.persistent(false);
-    WiFi.setAutoReconnect(false);
+    WiFi.setAutoReconnect(true);
+    /* P4: never WIFI_STA / WIFI_OFF — Hosted teardown resets the SoC and
+     * the MIPI panel goes black. AP+STA is the same mode SoftAP uses. */
+#if defined(MM1_BOARD_P4)
+    if (!WiFi.mode(WIFI_AP_STA)) {
+#else
     if (!WiFi.mode(WIFI_STA)) {
+#endif
         snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "STA mode failed");
         refresh_setup_wifi_display();
         return;
     }
     WiFi.setSleep(false);
+#if defined(ARDUINO_ARCH_ESP32)
+    (void)esp_wifi_set_ps(WIFI_PS_NONE);
+#endif
 
     if (job == WIFI_JOB_SCAN) {
         const int n = WiFi.scanNetworks(false, false);
@@ -3976,7 +4083,7 @@ static void wifi_start_service(void)
         }
         WiFi.scanDelete();
         snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note),
-                 g_wifi_scan_n ? "Tap a network" : "No networks");
+                 g_wifi_scan_n ? "Tap a network, then Join" : "No networks found");
         wifi_refresh_scan_buttons();
         refresh_setup_wifi_display();
         set_fstatus(g_wifi_scan_n ? "Scan done" : "No Wi-Fi");
@@ -4481,6 +4588,19 @@ static void refresh_setup_about_display(void)
         lv_obj_set_style_text_align(ui_lbl_setup_ver, LV_TEXT_ALIGN_CENTER, 0);
     }
 #ifdef ARDUINO_ARCH_ESP32
+    if (ui_lbl_about_fw) {
+        if (fw_gh_ota_newer() && fw_gh_ota_latest_tag()[0]) {
+            char n[96];
+            snprintf(n, sizeof(n), "New firmware %s — SETUP → WiFi → Install",
+                     fw_gh_ota_latest_tag());
+            lv_label_set_text(ui_lbl_about_fw, n);
+            lv_obj_set_style_text_color(ui_lbl_about_fw, lv_color_hex(C_WARN), 0);
+        } else {
+            lv_label_set_text(ui_lbl_about_fw,
+                              "Check for updates in SETUP → WiFi.");
+            lv_obj_set_style_text_color(ui_lbl_about_fw, lv_color_hex(ucol_grey()), 0);
+        }
+    }
     if (ui_qr_fw_update) {
         lv_qrcode_update(ui_qr_fw_update, FW_UPDATE_URL,
                          (uint32_t)strlen(FW_UPDATE_URL));
@@ -4510,47 +4630,73 @@ static void refresh_wifi_mode_buttons(void)
 
 static void refresh_setup_wifi_display(void)
 {
+    char ver[24];
+    format_fw_product_version(ver, sizeof(ver));
+
+    char notice[160] = "";
+    uint32_t ncol = ucol_grey();
+    const char *st = fw_gh_ota_status();
+    const bool busy = fw_gh_ota_busy();
+    const bool newer = fw_gh_ota_newer();
+    const bool joined = (WiFi.status() == WL_CONNECTED);
+    const bool ap = web_portal::running();
+
+    if (busy && st[0] && strstr(st, "Install")) {
+        snprintf(notice, sizeof(notice), "%s\nKeep the tape on.", st);
+        ncol = C_WARN;
+    } else if (busy) {
+        snprintf(notice, sizeof(notice), "%s", st[0] ? st : "Looking for updates…");
+        ncol = C_BTN_BT;
+    } else if (newer && fw_gh_ota_latest_tag()[0]) {
+        snprintf(notice, sizeof(notice),
+                 "New firmware %s\nTap Install to update.",
+                 fw_gh_ota_latest_tag());
+        ncol = C_WARN;
+    } else if (st[0] && strcmp(st, "idle") != 0) {
+        snprintf(notice, sizeof(notice), "%s", st);
+        if (strstr(st, "up to date"))
+            ncol = C_SD_ON;
+        else if (strstr(st, "Could not") || strstr(st, "Join a network"))
+            ncol = C_WARN;
+        else
+            ncol = ucol_text();
+    } else if (joined) {
+        snprintf(notice, sizeof(notice),
+                 "This tape: %s\nTap Check to look for an update.", ver);
+    } else if (ap) {
+        snprintf(notice, sizeof(notice),
+                 "This tape: %s\nAP has no internet — Join to Check.", ver);
+        ncol = C_WARN;
+    } else {
+        snprintf(notice, sizeof(notice),
+                 "This tape: %s\nJoin a network to check for updates.", ver);
+    }
+    if (ui_lbl_fw_notify) {
+        lv_label_set_text(ui_lbl_fw_notify, notice);
+        lv_obj_set_style_text_color(ui_lbl_fw_notify, lv_color_hex(ncol), 0);
+    }
+
     if (ui_lbl_setup_wifi) {
-        char wb[360];
-        char c6[72] = "";
-#if defined(MM1_BOARD_P4)
-        sap6_ble_format_status(c6, sizeof(c6));
-#endif
-        if (web_portal::running()) {
+        char wb[200];
+        if (ap) {
             snprintf(wb, sizeof(wb),
-                     "Wi-Fi: hotspot (no internet)\n"
-                     "SSID  %s   pass  %s\n"
-                     "http://%s\n"
-                     "%s%s"
-                     "Prefer Join + Install from GitHub.",
-                     WIFI_AP_SSID, WIFI_AP_PASS, web_portal::ap_ip(),
-                     c6[0] ? c6 : "", c6[0] ? "\n" : "");
-        } else if (WiFi.status() == WL_CONNECTED) {
-            IPAddress ip = WiFi.localIP();
+                     "Phone network: %s\nPassword: %s\nOpen http://%s on a phone.",
+                     WIFI_AP_SSID, WIFI_AP_PASS, web_portal::ap_ip());
+        } else if (joined) {
+            snprintf(wb, sizeof(wb), "Connected to %s",
+                     g_sta_ssid[0] ? g_sta_ssid : "the access point");
+        } else if (g_wifi_sta_wait || g_wifi_job == WIFI_JOB_STA) {
+            snprintf(wb, sizeof(wb), "Joining %s…",
+                     g_sta_ssid[0] ? g_sta_ssid : "the access point");
+        } else if (g_wifi_job == WIFI_JOB_SCAN) {
+            snprintf(wb, sizeof(wb), "Scanning…");
+        } else if (g_wifi_ap_note[0]) {
             snprintf(wb, sizeof(wb),
-                     "Wi-Fi: %s\n"
-                     "IP %u.%u.%u.%u   RSSI %d\n"
-                     "FW %s   latest %s\n"
-                     "%s%s%s"
-                     "%s",
-                     g_sta_ssid[0] ? g_sta_ssid : "joined",
-                     ip[0], ip[1], ip[2], ip[3], WiFi.RSSI(),
-                     FW_VERSION,
-                     fw_gh_ota_latest_tag()[0] ? fw_gh_ota_latest_tag() : "-",
-                     fw_gh_ota_status()[0] ? fw_gh_ota_status() : "",
-                     fw_gh_ota_status()[0] ? "\n" : "",
-                     g_wifi_ap_note[0] ? g_wifi_ap_note : "",
-                     c6[0] ? c6 : "");
+                     "Wi-Fi is off.\n%s", g_wifi_ap_note);
         } else {
             snprintf(wb, sizeof(wb),
-                     "Wi-Fi: Off (saves battery)\n"
-                     "%s%s"
-                     "Join a home/lab AP with internet.\n"
-                     "Hotspot has no web — Check needs it.\n"
-                     "%s",
-                     g_wifi_ap_note[0] ? g_wifi_ap_note : "",
-                     g_wifi_ap_note[0] ? "\n" : "",
-                     c6[0] ? c6 : "");
+                     "Wi-Fi is off to save battery.\n"
+                     "Scan, pick a network, then Join.");
         }
         lv_label_set_text(ui_lbl_setup_wifi, wb);
     }
@@ -4818,23 +4964,21 @@ static void update_status()
         const bool sta = (WiFi.status() == WL_CONNECTED);
         const bool ap  = web_portal::running();
         const bool busy = g_wifi_sta_wait || (g_wifi_job != WIFI_JOB_NONE);
-        if (sta) {
-            lv_label_set_text(ui_lbl_wifi, LV_SYMBOL_WIFI);
-            lv_obj_set_style_text_color(ui_lbl_wifi, lv_color_hex(C_SD_ON), 0);
-            lv_obj_clear_flag(ui_lbl_wifi, LV_OBJ_FLAG_HIDDEN);
-        } else if (ap) {
-            lv_label_set_text(ui_lbl_wifi, LV_SYMBOL_WIFI);
+        lv_label_set_text(ui_lbl_wifi, LV_SYMBOL_WIFI);
+        lv_obj_clear_flag(ui_lbl_wifi, LV_OBJ_FLAG_HIDDEN);
+        if (fw_gh_ota_newer())
             lv_obj_set_style_text_color(ui_lbl_wifi, lv_color_hex(C_WARN), 0);
-            lv_obj_clear_flag(ui_lbl_wifi, LV_OBJ_FLAG_HIDDEN);
-        } else if (busy) {
-            lv_label_set_text(ui_lbl_wifi, LV_SYMBOL_WIFI);
+        else if (sta)
+            lv_obj_set_style_text_color(ui_lbl_wifi, lv_color_hex(C_SD_ON), 0);
+        else if (ap)
+            lv_obj_set_style_text_color(ui_lbl_wifi, lv_color_hex(C_WARN), 0);
+        else if (busy)
             lv_obj_set_style_text_color(ui_lbl_wifi, lv_color_hex(C_BT_OFF), 0);
-            lv_obj_clear_flag(ui_lbl_wifi, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(ui_lbl_wifi, LV_OBJ_FLAG_HIDDEN);
-        }
+        else
+            lv_obj_set_style_text_color(ui_lbl_wifi, lv_color_hex(ucol_grey()), 0);
 #else
-        lv_obj_add_flag(ui_lbl_wifi, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(ui_lbl_wifi, LV_SYMBOL_WIFI);
+        lv_obj_set_style_text_color(ui_lbl_wifi, lv_color_hex(ucol_grey()), 0);
 #endif
     }
     lv_label_set_text(ui_lbl_sd,
@@ -4852,11 +4996,11 @@ static void update_status()
         uint32_t fill_col;
         int fill_w;
         if (bat_pct < 0) {
-            snprintf(bb, sizeof(bb), "--");
+            snprintf(bb, sizeof(bb), "--%%");
             fill_col = ucol_grey();
             fill_w = 0;
         } else {
-            snprintf(bb, sizeof(bb), "%d", bat_pct);
+            snprintf(bb, sizeof(bb), "%d%%", bat_pct);
             fill_w = (inner * constrain(bat_pct, 0, 100)) / 100;
             if (bat_pct <= 15)
                 fill_col = C_BAT_LOW;
@@ -6279,10 +6423,11 @@ static void build_ui()
     lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_layout(hdr, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(hdr, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(hdr, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
+    lv_obj_set_flex_align(hdr, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_left(hdr, 4, 0);
-    lv_obj_set_style_pad_right(hdr, 4, 0);
+    lv_obj_set_style_pad_left(hdr, 8, 0);
+    lv_obj_set_style_pad_right(hdr, 8, 0);
+    lv_obj_set_style_pad_column(hdr, 8, 0);
 
     auto hdr_mk_strip = [](lv_obj_t *parent) -> lv_obj_t * {
         lv_obj_t *s = lv_obj_create(parent);
@@ -6290,7 +6435,7 @@ static void build_ui()
         lv_obj_set_style_bg_opa(s, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(s, 0, 0);
         lv_obj_set_style_pad_all(s, 0, 0);
-        lv_obj_set_style_pad_column(s, UI_TALL ? 12 : (UI_COMPACT_HEADER ? 4 : 8), 0);
+        lv_obj_set_style_pad_column(s, 0, 0);
         lv_obj_set_layout(s, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(s, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(s, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
@@ -6300,7 +6445,8 @@ static void build_ui()
     };
 
     lv_obj_t *hdr_left = hdr_mk_strip(hdr);
-    lv_obj_set_flex_grow(hdr_left, 1);
+    lv_obj_set_width(hdr_left, LV_SIZE_CONTENT);
+    lv_obj_set_flex_grow(hdr_left, 0);
 
     lv_obj_t *lt = lv_label_create(hdr_left);
     lv_label_set_text(lt, "MM1-BLACK");
@@ -6308,8 +6454,8 @@ static void build_ui()
     lv_obj_set_style_text_font(lt, UI_FONT_MD, 0);
 
     lv_obj_t *hdr_right = hdr_mk_strip(hdr);
-    lv_obj_set_flex_grow(hdr_right, 0);
-    lv_obj_set_flex_align(hdr_right, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER,
+    lv_obj_set_flex_grow(hdr_right, 1);
+    lv_obj_set_flex_align(hdr_right, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
 
     const int bat_bw = UI_TALL ? 36 : 26;
@@ -6380,7 +6526,6 @@ static void build_ui()
     lv_label_set_text(ui_lbl_wifi, LV_SYMBOL_WIFI);
     lv_obj_set_style_text_font(ui_lbl_wifi, UI_FONT_MD, 0);
     lv_obj_set_style_text_color(ui_lbl_wifi, lv_color_hex(C_BT_OFF), 0);
-    lv_obj_add_flag(ui_lbl_wifi, LV_OBJ_FLAG_HIDDEN);
 
     ui_lbl_bt = lv_label_create(hdr_right);
     lv_label_set_text(ui_lbl_bt, LV_SYMBOL_BLUETOOTH);
@@ -6619,7 +6764,7 @@ static void build_ui()
     mk_card(1, "IMU", &ui_lbl_imu_val);
     mk_card(2, "LINK", &ui_lbl_sens_stat);
     mk_card(3, "BUTTON", &ui_lbl_sens_btn);
-    mk_card(4, "TEMP", &ui_lbl_sens_temp);
+    mk_card(4, "TEMP / BAT", &ui_lbl_sens_temp);
 
     // ── FILES tab ────────────────────────────────────────────────────────
     lv_obj_t *tf = lv_tabview_add_tab(tv,
@@ -7023,7 +7168,7 @@ static void build_ui()
 
         refresh_setup_bt_status();
 
-        /* --- Wi-Fi: join AP, check GitHub Pages, optional hotspot --- */
+        /* --- Wi-Fi: join AP, check updates, optional phone AP --- */
         lv_obj_t *t_wifi = lv_tabview_add_tab(sub_tv, "WiFi");
         lv_obj_set_layout(t_wifi, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(t_wifi, LV_FLEX_FLOW_COLUMN);
@@ -7032,7 +7177,14 @@ static void build_ui()
         lv_obj_add_flag(t_wifi, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_scroll_dir(t_wifi, LV_DIR_VER);
 
-        setup_mk_label_wrap(t_wifi, "Join Wi-Fi",
+        setup_mk_label_wrap(t_wifi, "Firmware",
+                            UI_FONT_MD,
+                            C_HDR_LINE, LV_TEXT_ALIGN_LEFT);
+        ui_lbl_fw_notify = setup_mk_label_wrap(t_wifi, UI_NA,
+                                               UI_FONT_SM,
+                                               ucol_text(), LV_TEXT_ALIGN_LEFT);
+
+        setup_mk_label_wrap(t_wifi, "Network",
                             UI_FONT_MD,
                             C_HDR_LINE, LV_TEXT_ALIGN_LEFT);
         ui_lbl_setup_wifi = setup_mk_label_wrap(t_wifi, UI_NA,
@@ -7106,9 +7258,8 @@ static void build_ui()
         ui_lbl_setup_ver = setup_mk_label_wrap(t_about, UI_NA,
                                                UI_FONT_SM,
                                                ucol_text(), LV_TEXT_ALIGN_CENTER);
-        setup_mk_label_wrap(t_about,
-            "Firmware: USB installer or SETUP WiFi Join.\n"
-            "https://verlab.github.io/mm1-black/",
+        ui_lbl_about_fw = setup_mk_label_wrap(t_about,
+            "Check for updates in SETUP → WiFi.",
             UI_FONT_SM,
             ucol_grey(), LV_TEXT_ALIGN_CENTER);
 
@@ -7589,12 +7740,22 @@ void loop()
     wifi_start_service();
     {
         static char ota_seen[80] = "";
+        static int ota_pct_seen = -1;
         fw_gh_ota_poll();
-        if (strcmp(ota_seen, fw_gh_ota_status()) != 0) {
+        if (strcmp(ota_seen, fw_gh_ota_status()) != 0 ||
+            ota_pct_seen != fw_gh_ota_percent()) {
             snprintf(ota_seen, sizeof(ota_seen), "%s", fw_gh_ota_status());
+            ota_pct_seen = fw_gh_ota_percent();
             refresh_setup_wifi_display();
+            refresh_setup_about_display();
             if (fw_gh_ota_newer())
                 set_fstatus("New firmware");
+            else if (strstr(ota_seen, "up to date"))
+                set_fstatus("Up to date");
+        }
+        if (!g_ota_boot_ok && millis() > 8000UL) {
+            g_ota_boot_ok = true;
+            fw_gh_ota_mark_boot_ok();
         }
     }
     web_portal::loop();

@@ -6,7 +6,7 @@
     <title>Install MM1-BLACK · MIRA</title>
     <meta
       name="description"
-      content="USB firmware installer for MM1-BLACK — Web Serial, GitHub Releases. CYD and ESP32-P4."
+      content="Firmware installer for MM1-BLACK — Wi-Fi or USB UART, GitHub Releases."
     />
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -22,32 +22,47 @@
       </header>
 
       <section class="hero">
-        <p class="kicker">MM1-BLACK · USB installer</p>
+        <p class="kicker">MM1-BLACK · installer</p>
         <h1>Flash firmware</h1>
         <p class="lede">
-          Chrome or Edge on a desktop. Same images the device installs over Wi-Fi
-          after <strong>SETUP → WiFi → Join</strong>.
+          Chrome or Edge on a desktop. Prefer <strong>Wi-Fi</strong> when the
+          tape has joined an AP. USB UART is the fallback.
         </p>
       </section>
 
       <noscript>
-        <p class="banner err">JavaScript is required for USB flashing.</p>
+        <p class="banner err">JavaScript is required.</p>
       </noscript>
 
       <div id="noSerial" class="banner err hidden" role="alert">
-        Web Serial is unavailable. Open this page in
+        Web Serial is unavailable. USB flash needs
         <strong>Google Chrome</strong> or <strong>Microsoft Edge</strong>
-        on a desktop PC (not iOS).
+        on a desktop PC. Wi-Fi install still works.
       </div>
 
-      <div id="p4Hint" class="banner warn hidden">
-        P4 uses the <strong>USB TO UART</strong> port (QinHeng <code>1a86:55d3</code>),
-        not USB OTG. A blank board still needs a first PlatformIO flash
-        (bootloader + partitions). This page writes the app image.
+      <div class="row">
+        <span class="field-label">Method</span>
+        <div class="board-toggle" role="group" aria-label="Install method">
+          <button type="button" class="board-btn active" id="btnModeWifi" data-mode="wifi">
+            Wi-Fi
+            <small>Access point</small>
+          </button>
+          <button type="button" class="board-btn" id="btnModeUsb" data-mode="usb">
+            USB
+            <small>UART</small>
+          </button>
+        </div>
       </div>
 
-      <ol class="steps" id="stepList">
-        <li><span>01</span> USB data cable into MM1-BLACK</li>
+      <ol class="steps" id="stepListWifi">
+        <li><span>01</span> SETUP → WiFi → Join an AP, or tap AP</li>
+        <li><span>02</span> Same network as this computer</li>
+        <li><span>03</span> Find the device, or enter its address</li>
+        <li><span>04</span> Install</li>
+      </ol>
+
+      <ol class="steps hidden" id="stepListUsb">
+        <li><span>01</span> Connect USB UART</li>
         <li><span>02</span> Close IDE / serial monitor</li>
         <li><span>03</span> Pick board, then Install</li>
         <li><span>04</span> BOOT → RST if asked</li>
@@ -75,22 +90,46 @@
           </select>
         </div>
 
-        <div class="row row-split">
-          <div>
-            <label for="flashBaud">Flash speed</label>
-            <select id="flashBaud">
-              <option value="115200" selected>115200 baud</option>
-              <option value="230400">230400 baud</option>
-              <option value="460800">460800 baud</option>
-              <option value="921600">921600 baud</option>
-            </select>
+        <div id="wifiPanel">
+          <div class="row">
+            <label for="otaHost">Device address</label>
+            <div class="host-row">
+              <input
+                id="otaHost"
+                type="text"
+                spellcheck="false"
+                autocomplete="off"
+                value="192.168.4.1"
+                placeholder="192.168.4.1"
+              />
+              <button type="button" class="ghost-btn" id="btnFind">Find</button>
+            </div>
+            <p class="hint" id="wifiHint">
+              SoftAP is <code>192.168.4.1</code>. After Join, use the address
+              on SETUP → WiFi.
+            </p>
+            <div id="foundDevices" class="found"></div>
           </div>
-          <div class="installed">
-            <span class="label">On device</span>
-            <span id="deviceVersion" class="mono">—</span>
-            <button type="button" class="linkish" id="btnReadVersion" title="Read VERSION from the device">
-              Read
-            </button>
+        </div>
+
+        <div id="usbPanel" class="hidden">
+          <div class="row row-split">
+            <div>
+              <label for="flashBaud">Flash speed</label>
+              <select id="flashBaud">
+                <option value="115200" selected>115200 baud</option>
+                <option value="230400">230400 baud</option>
+                <option value="460800">460800 baud</option>
+                <option value="921600">921600 baud</option>
+              </select>
+            </div>
+            <div class="installed">
+              <span class="label">On device</span>
+              <span id="deviceVersion" class="mono">—</span>
+              <button type="button" class="linkish" id="btnReadVersion" title="Read VERSION from the device">
+                Read
+              </button>
+            </div>
           </div>
         </div>
 
@@ -99,7 +138,7 @@
 
         <label class="ack">
           <input type="checkbox" id="ackFlash" />
-          <span>Do not unplug USB during flash.</span>
+          <span id="ackLabel">Do not power off during flash.</span>
         </label>
 
         <button type="button" class="install-btn" id="btnInstall" disabled>
@@ -122,6 +161,7 @@
         <span>QR on device · SETUP → About</span>
       </footer>
     </div>
+    <form id="wifiOtaForm" class="hidden" method="POST" enctype="multipart/form-data" target="mm1ota"></form>
     <script type="module" src="app.js"></script>
   </body>
 </html>

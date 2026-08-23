@@ -6,19 +6,18 @@ Shows **FW_VERSION** and a QR code to:
 
 **https://verlab.github.io/mm1-black/**
 
-P4 QR opens `?board=p4`. Wi-Fi defaults **Off**. Join a home/lab access point
+P4 QR opens `?board=p4`. Wi-Fi defaults **Off**. Join an access point
 to check GitHub Pages for a newer release and install it on the device.
 
-## USB installer (PC)
+## Installer (PC)
 
-1. Connect **MM1-BLACK** by USB to a PC (**Chrome** or **Edge**).
-2. Open the **[firmware installer](https://verlab.github.io/mm1-black/)**.
-3. Pick **CYD** or **P4**, select a release, confirm the checkbox, click **Install**.
-4. Optional: **Read** sends `VERSION` (CYD 9600 baud, P4 115200) → `MM1_FW_VERSION=…`
-
-P4 uses the **USB TO UART** port (QinHeng `1a86:55d3`), not USB OTG. A blank
-board still needs a first PlatformIO USB flash (bootloader + partitions + app).
-This page writes the **app** image (`firmware.bin` @ `0x10000`).
+1. Open the **[firmware installer](https://verlab.github.io/mm1-black/)**
+   (**Chrome** or **Edge**).
+2. **Wi-Fi** (preferred): Join an AP on the tape, or tap **AP**. Enter the
+   address from SETUP → WiFi (or `192.168.4.1` on the MM1 access point),
+   then **Install**.
+3. **USB UART**: connect a USB UART cable, pick the board, then **Install**.
+4. Optional USB **Read** sends `VERSION` → `MM1_FW_VERSION=…`
 
 Images on [GitHub Releases](https://github.com/verlab/mm1-black/releases):
 
@@ -27,6 +26,24 @@ Images on [GitHub Releases](https://github.com/verlab/mm1-black/releases):
 
 Pages also publishes `latest.json` so the device and the installer share the
 same current file.
+
+## Lab flash over Join (no USB)
+
+Wi-Fi stays **Off at boot**. After you tap **Join**, HTTP `/update` is on the
+STA address shown in SETUP → WiFi (`OTA http://x.x.x.x/update`). Credentials
+stay in NVS so Join is one tap; the radio does not start by itself.
+
+```bash
+pio run -e mm1_p4
+./scripts/ota_lan_flash.py --watch
+```
+
+The script scans the LAN (and `192.168.4.1`) for `/api/status` and POSTs
+`firmware.bin`. USB loop while opening housings:
+
+```bash
+./scripts/usb_flash_p4.sh
+```
 
 ## On-device update (Join Wi-Fi)
 
@@ -44,8 +61,8 @@ is offline (the UI will say so). Partition table is dual-slot
 ## SoftAP (optional)
 
 SETUP → WiFi → **AP** still opens `MM1-MIRA` / `mira-mm1` for CSV export.
-`http://192.168.4.1/update` is last-resort local `firmware.bin` only — prefer
-the GitHub Pages installer or Join + Install.
+`http://192.168.4.1/update` accepts a local `firmware.bin`. Prefer the
+GitHub Pages installer (Wi-Fi) or Join + Install on the tape.
 
 ## Developers
 

@@ -6,7 +6,10 @@
 #include <ctype.h>
 #include "firmware_version.h"
 
-static char g_cmd_buf[24];
+static char g_cmd_buf[32];
+
+extern void mm1_on_serial_wifi_ap(void);
+extern void mm1_on_serial_wifi_join(void);
 static uint8_t g_cmd_len = 0;
 
 void serial_cmd_poll(void)
@@ -24,6 +27,12 @@ void serial_cmd_poll(void)
                     strcmp(g_cmd_buf, "FW_VERSION") == 0) {
                     Serial.print("MM1_FW_VERSION=");
                     Serial.println(FW_VERSION);
+                } else if (strcmp(g_cmd_buf, "WIFI_AP") == 0) {
+                    Serial.println("MM1_WIFI=AP");
+                    mm1_on_serial_wifi_ap();
+                } else if (strcmp(g_cmd_buf, "WIFI_JOIN") == 0) {
+                    Serial.println("MM1_WIFI=JOIN");
+                    mm1_on_serial_wifi_join();
                 }
             }
             g_cmd_len = 0;

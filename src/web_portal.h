@@ -35,8 +35,12 @@ struct Callbacks {
 };
 
 bool start(const char* ssid, const char* password, const Callbacks& cb);
+/** HTTP on the current interface (STA after Join) — /api/status + /update. */
+bool start_http(const Callbacks& cb);
+void stop_ap();
 void stop();
 bool running();
+bool http_running();
 uint8_t clients();
 const char* ap_ip();
 const char* last_error();

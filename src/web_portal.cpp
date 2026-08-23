@@ -36,7 +36,8 @@ constexpr uint8_t  kMaxClients = 4;
 
 WebServer  g_server(kHttpPort);
 Callbacks  g_cb{};
-bool       g_running      = false;
+bool       g_running      = false; /* SoftAP */
+bool       g_http_on      = false;
 bool       g_routes_ready = false;
 char       g_ip[20]       = "0.0.0.0";
 char       g_err[72]      = "";
@@ -160,10 +161,10 @@ tr:hover td{background:rgba(91,192,255,.06)}
         <a class="btn" href="/api/files">Files JSON</a>
         <a class="btn" href="/api/status">Status JSON</a>
         <a class="btn" href="/api/points">Points JSON</a>
-        <a class="btn primary" href="https://verlab.github.io/mm1-black/">Install firmware (USB / GitHub)</a>
-        <a class="btn" href="/update">Last-resort upload (firmware.bin only)</a>
+        <a class="btn primary" href="https://verlab.github.io/mm1-black/">Install firmware</a>
+        <a class="btn" href="/update">Upload firmware.bin</a>
       </div>
-      <div class="spark" style="margin-top:12px">CSV endpoints are read-only. Prefer the GitHub installer or SETUP → WiFi → Install.</div>
+      <div class="spark" style="margin-top:12px">CSV endpoints are read-only. Prefer the installer or SETUP → WiFi → Install.</div>
     </section>
 
     <section class="card col-12">
@@ -241,6 +242,12 @@ void send_status_json()
     Status st{};
     if (g_cb.get_status) g_cb.get_status(st);
     String j = "{";
+    j += "\"mm1\":true,";
+#if defined(MM1_BOARD_P4)
+    j += "\"board\":\"p4\",";
+#else
+    j += "\"board\":\"cyd\",";
+#endif
     j += "\"fw\":\"";   j += st.fw_version ? st.fw_version : ""; j += "\",";
     j += "\"dev\":\"";  j += st.device_name ? st.device_name : ""; j += "\",";
     j += "\"csv\":\"";  j += st.active_csv ? st.active_csv : ""; j += "\",";
@@ -255,6 +262,7 @@ void send_status_json()
     j += "\"cli\":";    j += (uint32_t)st.wifi_clients; j += ",";
     j += "\"up\":";     j += (uint32_t)(millis() / 1000);
     j += "}";
+    g_server.sendHeader("X-MM1-BLACK", "1");
     g_server.send(200, "application/json", j);
 }
 
@@ -353,9 +361,9 @@ input,button{font:inherit} button{background:#1f3a66;color:#cfe6ff;border:1px so
 .muted{color:#8b97ad;font-size:13px}
 </style></head><body>
 <div class="card">
-<h2>Last-resort firmware upload</h2>
-<p>Preferred: open <a href="https://verlab.github.io/mm1-black/">verlab.github.io/mm1-black</a> on a PC (USB) or use <b>SETUP → WiFi → Join</b> then <b>Install</b> on the device.</p>
-<p>This form is only for a local <code>firmware.bin</code> (not <code>firmware.factory.bin</code>).</p>
+<h2>Firmware upload</h2>
+<p>Preferred: open <a href="https://verlab.github.io/mm1-black/">verlab.github.io/mm1-black</a> or use <b>SETUP → WiFi → Join</b> then <b>Install</b> on the device.</p>
+<p>This form is for a local <code>firmware.bin</code> (not <code>firmware.factory.bin</code>).</p>
 <form method="POST" action="/update" enctype="multipart/form-data">
   <p><input type="file" name="firmware" accept=".bin" required></p>
   <p><button type="submit">Install and reboot</button></p>
@@ -509,39 +517,71 @@ bool start(const char* ssid, const char* password, const Callbacks& cb)
     IPAddress ip = WiFi.softAPIP();
     snprintf(g_ip, sizeof(g_ip), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
 
-    g_server.begin();
+    if (!g_http_on) {
+        g_server.begin();
+        g_http_on = true;
+    }
     g_running = true;
     return true;
 }
 
+bool start_http(const Callbacks& cb)
+{
+    g_cb = cb;
+    g_err[0] = '\0';
+    register_http_routes_once();
+    if (!g_http_on) {
+        g_server.begin();
+        g_http_on = true;
+    }
+    IPAddress ip = WiFi.localIP();
+    if (ip[0] == 0)
+        ip = WiFi.softAPIP();
+    snprintf(g_ip, sizeof(g_ip), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+    return true;
+}
+
+void stop_ap()
+{
+    if (!g_running)
+        return;
+    WiFi.softAPdisconnect(true);
+    delay(40);
+    g_running = false;
+}
+
 void stop()
 {
-    if (!g_running) return;
-    g_server.close();
-    delay(20);
-    g_server.stop();
-    WiFi.softAPdisconnect(true);
-    delay(80);
-    /* P4: WiFi.mode(OFF) tears down Hosted and can reset the SoC. */
+    if (g_http_on) {
+        g_server.close();
+        delay(20);
+        g_server.stop();
+        g_http_on = false;
+    }
+    if (g_running) {
+        WiFi.softAPdisconnect(true);
+        delay(80);
+        g_running = false;
+    }
 #if !defined(MM1_BOARD_P4)
     WiFi.mode(WIFI_OFF);
 #endif
-    g_running = false;
     g_cb = {};
     g_ip[0] = '0';
     g_ip[1] = '\0';
 }
 
-bool        running()   { return g_running; }
-uint8_t     clients()   { return g_running ? WiFi.softAPgetStationNum() : 0; }
-const char* ap_ip()     { return g_ip; }
-const char* last_error(){ return g_err; }
+bool        running()      { return g_running; }
+bool        http_running() { return g_http_on; }
+uint8_t     clients()      { return g_running ? WiFi.softAPgetStationNum() : 0; }
+const char* ap_ip()        { return g_ip; }
+const char* last_error()   { return g_err; }
 
 OtaState    ota_state()   { return g_ota_state; }
 int         ota_percent() { return g_ota_pct; }
 const char *ota_message() { return g_ota_msg; }
 
-void loop()             { if (g_running) g_server.handleClient(); }
+void loop()             { if (g_http_on) g_server.handleClient(); }
 
 }  // namespace web_portal
 

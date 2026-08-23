@@ -431,3 +431,82 @@ footer a:hover {
   background: rgba(255, 255, 255, 0.08);
   color: var(--text);
 }
+
+input[type="text"] {
+  width: 100%;
+  padding: 11px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #0a0b0e;
+  color: var(--text);
+  font-size: 0.95rem;
+  font-family: var(--mono);
+}
+
+input[type="text"]:focus {
+  outline: none;
+  border-color: var(--line-strong);
+}
+
+.host-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.ghost-btn {
+  padding: 0 16px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #0a0b0e;
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ghost-btn:hover:not(:disabled) {
+  border-color: var(--line-strong);
+}
+
+.ghost-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.found {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.found button {
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  font-size: 0.84rem;
+  cursor: pointer;
+}
+
+.found button:hover,
+.found button.active {
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.found small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.74rem;
+}
+
+.hint code {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+}

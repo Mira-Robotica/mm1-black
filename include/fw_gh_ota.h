@@ -20,6 +20,12 @@ void fw_gh_ota_request_check(void);
 void fw_gh_ota_request_install(void);
 void fw_gh_ota_poll(void);
 
+/** After STA gets an IP: install public DNS (Hosted DHCP often leaves DNS empty). */
+void fw_gh_ota_bind_sta(void);
+
+/** After the new image has painted the UI, cancel bootloader rollback. */
+void fw_gh_ota_mark_boot_ok(void);
+
 bool fw_gh_ota_busy(void);
 bool fw_gh_ota_newer(void);
 int  fw_gh_ota_percent(void);

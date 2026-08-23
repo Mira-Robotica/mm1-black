@@ -1,7 +1,6 @@
 /**
- * MM1-BLACK — USB installer (Web Serial + esptool-js). MIRA.
+ * MM1-BLACK — installer (Wi-Fi /update or USB UART + esptool-js). MIRA.
  * Release metadata from GitHub API; .bin served from ./bins/ (same origin).
- * Device Wi-Fi OTA uses the same files via ./latest.json.
  */
 
 const REPO = "verlab/mm1-black";
@@ -32,19 +31,15 @@ const BOARDS = {
   },
 };
 
-const USB_ADAPTER_NAMES = {
-  "1a86:7523": "WCH CH340",
-  "1a86:5523": "WCH CH341 serial",
-  "1a86:55d3": "QinHeng USB TO UART (P4)",
-  "10c4:ea60": "Silicon Labs CP210x",
-  "0403:6001": "FTDI FT232",
-};
+const AP_HOST = "192.168.4.1";
 
 let selectedBoard = "denky32";
+let installMode = "wifi";
 let selectedPort = null;
 let releases = [];
 let deviceVersion = null;
 let esptoolModule = null;
+let foundDevices = [];
 
 const $ = (id) => document.getElementById(id);
 const logEl = $("log");
@@ -87,14 +82,21 @@ function flashBaud() {
   return sel ? parseInt(sel.value, 10) || DEFAULT_FLASH_BAUD : DEFAULT_FLASH_BAUD;
 }
 
-function usbAdapterName(port) {
-  const info = port.getInfo();
-  if (!info.usbVendorId) return "USB serial";
-  const key =
-    info.usbVendorId.toString(16) +
-    ":" +
-    (info.usbProductId || 0).toString(16);
-  return USB_ADAPTER_NAMES[key] || `USB serial (${key})`;
+function usbAdapterName(_port) {
+  return "USB UART";
+}
+
+function otaHost() {
+  const el = $("otaHost");
+  return (el && el.value ? el.value : AP_HOST).trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+}
+
+function validHost(host) {
+  if (!host) return false;
+  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(host)) {
+    return host.split(".").every((n) => +n >= 0 && +n <= 255);
+  }
+  return /^[a-zA-Z0-9.-]+$/.test(host) && host.length < 80;
 }
 
 function configureLoaderBaud(loader, baud) {
@@ -243,23 +245,20 @@ function updateUI() {
         cmp.innerHTML =
           '<span class="compare-older">Device is newer than selected build.</span>';
       else cmp.textContent = "Device matches selected release.";
-      const canInstall =
-        releases.length > 0 &&
-        $("releaseSelect").value &&
-        $("ackFlash").checked &&
-        "serial" in navigator;
-      $("btnInstall").disabled = !canInstall;
+      $("btnInstall").disabled = !canInstall();
       return;
     }
   }
   cmp.textContent = rel ? "" : "";
+  $("btnInstall").disabled = !canInstall();
+}
 
-  const canInstall =
-    releases.length > 0 &&
-    $("releaseSelect").value &&
-    $("ackFlash").checked &&
-    "serial" in navigator;
-  $("btnInstall").disabled = !canInstall;
+function canInstall() {
+  const ready =
+    releases.length > 0 && $("releaseSelect").value && $("ackFlash").checked;
+  if (!ready) return false;
+  if (installMode === "wifi") return validHost(otaHost());
+  return "serial" in navigator;
 }
 
 function localBinUrl(fileName) {
@@ -268,13 +267,33 @@ function localBinUrl(fileName) {
 
 function applyBoardChrome() {
   const p4 = selectedBoard === "mm1_p4";
-  const hint = $("p4Hint");
-  if (hint) hint.classList.toggle("hidden", !p4);
   $("btnBoardCyd").classList.toggle("active", !p4);
   $("btnBoardP4").classList.toggle("active", p4);
   try {
     localStorage.setItem("mm1-board", selectedBoard);
   } catch (_) {}
+}
+
+function applyModeChrome() {
+  const wifi = installMode === "wifi";
+  $("btnModeWifi").classList.toggle("active", wifi);
+  $("btnModeUsb").classList.toggle("active", !wifi);
+  $("stepListWifi").classList.toggle("hidden", !wifi);
+  $("stepListUsb").classList.toggle("hidden", wifi);
+  $("wifiPanel").classList.toggle("hidden", !wifi);
+  $("usbPanel").classList.toggle("hidden", wifi);
+  $("ackLabel").textContent = wifi
+    ? "Do not power off during flash."
+    : "Do not unplug USB during flash.";
+  try {
+    localStorage.setItem("mm1-mode", installMode);
+  } catch (_) {}
+  updateUI();
+}
+
+function setMode(mode) {
+  installMode = mode === "usb" ? "usb" : "wifi";
+  applyModeChrome();
 }
 
 function setBoard(id, reload) {
@@ -373,7 +392,7 @@ async function fetchReleases() {
   if (!releases.length) {
     sel.innerHTML = `<option value="">No ${board().prefix}*.bin yet</option>`;
     setStatus(
-      `No ${selectedBoard} firmware on Releases yet. Tag a v* build or use SETUP → WiFi after the first USB flash.`,
+      `No ${selectedBoard} firmware on Releases yet. Tag a v* build or use SETUP → WiFi → Join after the first flash.`,
       "err"
     );
     updateUI();
@@ -573,7 +592,186 @@ async function connectLoader(port, baud, terminal) {
   );
 }
 
+async function probeMm1(host, ms = 1800) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const res = await fetch(`http://${host}/api/status`, {
+      signal: ctrl.signal,
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const st = await res.json();
+    const mm1 =
+      res.headers.get("X-MM1-BLACK") === "1" ||
+      st.mm1 === true ||
+      st.ssid === "MM1-MIRA" ||
+      (typeof st.dev === "string" && st.dev.startsWith("SAP6"));
+    if (!mm1) return null;
+    return { ...st, _ip: host };
+  } catch (_) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function renderFound() {
+  const box = $("foundDevices");
+  if (!box) return;
+  box.innerHTML = "";
+  for (const st of foundDevices) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    const board = st.board ? String(st.board).toUpperCase() : "MM1";
+    const fw = st.fw || "—";
+    btn.innerHTML = `${board} · ${fw}<small>${st._ip}</small>`;
+    if (st._ip === otaHost()) btn.classList.add("active");
+    btn.addEventListener("click", () => {
+      $("otaHost").value = st._ip;
+      try {
+        localStorage.setItem("mm1-ota-host", st._ip);
+      } catch (_) {}
+      renderFound();
+      updateUI();
+    });
+    box.appendChild(btn);
+  }
+}
+
+async function findDevices() {
+  const btn = $("btnFind");
+  if (btn) btn.disabled = true;
+  foundDevices = [];
+  renderFound();
+  setStatus("Looking for MM1-BLACK on the network…");
+
+  const hosts = new Set([AP_HOST]);
+  const typed = otaHost();
+  if (validHost(typed)) hosts.add(typed);
+
+  const results = [];
+  for (const host of hosts) {
+    const st = await probeMm1(host);
+    if (st) results.push(st);
+  }
+
+  foundDevices = results;
+  renderFound();
+
+  if (results.length) {
+    if (!validHost(typed) || typed === AP_HOST) {
+      $("otaHost").value = results[0]._ip;
+    }
+    setStatus(`Found ${results.length} device(s).`, "ok");
+    log(`Found: ${results.map((d) => `${d._ip} ${d.fw || ""}`).join(", ")}`);
+  } else {
+    setStatus(
+      "No device answered. Enter the address from SETUP → WiFi, or connect this computer to the MM1 access point and use 192.168.4.1.",
+      "err"
+    );
+    log("Find: no HTTP /api/status (HTTPS pages cannot scan the LAN).");
+  }
+  if (btn) btn.disabled = false;
+  updateUI();
+}
+
+function postFirmwareForm(host, firmware, fileName) {
+  const form = $("wifiOtaForm");
+  form.innerHTML = "";
+  form.action = `http://${host}/update`;
+  const input = document.createElement("input");
+  input.type = "file";
+  input.name = "firmware";
+  const dt = new DataTransfer();
+  dt.items.add(
+    new File([firmware], fileName, { type: "application/octet-stream" })
+  );
+  input.files = dt.files;
+  form.appendChild(input);
+  window.open("about:blank", "mm1ota");
+  form.submit();
+}
+
+async function installFirmwareWifi() {
+  const tag = $("releaseSelect").value;
+  const rel = releases.find((r) => r.tag === tag);
+  const host = otaHost();
+  if (!rel) {
+    setStatus("Select a firmware release.", "err");
+    return;
+  }
+  if (!$("ackFlash").checked) {
+    setStatus("Confirm the checkbox first.", "err");
+    return;
+  }
+  if (!validHost(host)) {
+    setStatus("Enter a device address.", "err");
+    return;
+  }
+
+  $("btnInstall").disabled = true;
+  $("btnFind").disabled = true;
+  setProgress(0);
+  setStatus("Downloading firmware…");
+
+  try {
+    const firmware = await downloadFirmware(rel);
+    log(`Downloaded ${(firmware.byteLength / 1024).toFixed(0)} KB.`);
+    setProgress(30);
+
+    setStatus(`Sending to ${host}…`);
+    let posted = false;
+    try {
+      const fd = new FormData();
+      fd.append(
+        "firmware",
+        new Blob([firmware], { type: "application/octet-stream" }),
+        rel.fileName
+      );
+      const res = await fetch(`http://${host}/update`, {
+        method: "POST",
+        body: fd,
+      });
+      posted = true;
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(txt || `HTTP ${res.status}`);
+      }
+      log(`Wi-Fi update: ${await res.text().catch(() => "ok")}`);
+    } catch (e) {
+      if (posted) throw e;
+      log(`Direct send blocked (${e.message || e}). Using the update page…`);
+      postFirmwareForm(host, firmware, rel.fileName);
+    }
+
+    setProgress(100);
+    setStatus(
+      posted
+        ? `Installed ${rel.tag}. The tape should reboot.`
+        : `Sending ${rel.tag} to http://${host}/update. Keep that tab open until it reboots.`,
+      "ok"
+    );
+    log(`Wi-Fi install started → ${host}`);
+    try {
+      localStorage.setItem("mm1-ota-host", host);
+    } catch (_) {}
+  } catch (e) {
+    log(`Wi-Fi install failed: ${e.message || e}`);
+    setStatus(`Install failed: ${e.message || e}`, "err");
+  } finally {
+    hideProgress();
+    $("btnFind").disabled = false;
+    updateUI();
+  }
+}
+
 async function installFirmware() {
+  if (installMode === "wifi") {
+    await installFirmwareWifi();
+    return;
+  }
+
   const tag = $("releaseSelect").value;
   const rel = releases.find((r) => r.tag === tag);
   if (!rel) {
@@ -662,23 +860,51 @@ function initBoardFromUrl() {
   return "denky32";
 }
 
+function initModeFromUrl() {
+  const q = new URLSearchParams(window.location.search).get("mode");
+  if (q === "usb") return "usb";
+  if (q === "wifi") return "wifi";
+  try {
+    const saved = localStorage.getItem("mm1-mode");
+    if (saved === "usb" || saved === "wifi") return saved;
+  } catch (_) {}
+  return "wifi";
+}
+
 function init() {
   selectedBoard = initBoardFromUrl();
+  installMode = initModeFromUrl();
   applyBoardChrome();
+  applyModeChrome();
+
+  try {
+    const savedHost = localStorage.getItem("mm1-ota-host");
+    if (savedHost && validHost(savedHost)) $("otaHost").value = savedHost;
+  } catch (_) {}
 
   $("btnBoardCyd").addEventListener("click", () => setBoard("denky32", true));
   $("btnBoardP4").addEventListener("click", () => setBoard("mm1_p4", true));
+  $("btnModeWifi").addEventListener("click", () => setMode("wifi"));
+  $("btnModeUsb").addEventListener("click", () => setMode("usb"));
+  $("btnFind").addEventListener("click", () => findDevices().catch((e) => {
+    log(`Find: ${e.message}`);
+    setStatus(e.message, "err");
+  }));
+  $("otaHost").addEventListener("input", () => {
+    try {
+      localStorage.setItem("mm1-ota-host", otaHost());
+    } catch (_) {}
+    updateUI();
+  });
 
   if (!("serial" in navigator)) {
     $("noSerial").classList.remove("hidden");
-    $("btnInstall").disabled = true;
     $("btnReadVersion").disabled = true;
-    fetchReleases().catch(() => {});
-    return;
+  } else {
+    $("btnReadVersion").addEventListener("click", readInstalledVersion);
   }
 
   $("btnInstall").addEventListener("click", installFirmware);
-  $("btnReadVersion").addEventListener("click", readInstalledVersion);
   $("releaseSelect").addEventListener("change", updateUI);
   $("ackFlash").addEventListener("change", updateUI);
   $("flashBaud").addEventListener("change", updateUI);
