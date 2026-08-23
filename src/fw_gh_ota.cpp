@@ -166,10 +166,9 @@ void http_prep(HTTPClient &http, int timeout_ms)
 
 /* GitHub Pages (Fastly). Avoid Hosted UDP DNS — it fails on the C6 path. */
 static const uint8_t k_pages_ip[][4] = {
-    {185, 199, 110, 153},
-    {185, 199, 109, 153},
-    {185, 199, 111, 153},
     {185, 199, 108, 153},
+    {185, 199, 110, 153},
+    {185, 199, 111, 153},
 };
 
 static bool read_http_body(Client &c, String &body, int timeout_ms)
@@ -267,8 +266,8 @@ static bool pages_tls_open(WiFiClientSecure &c)
 {
     c.stop();
     c.setInsecure();
-    c.setHandshakeTimeout(20);
-    c.setTimeout(15000);
+    c.setHandshakeTimeout(12);
+    c.setTimeout(12000);
     for (unsigned i = 0; i < sizeof(k_pages_ip) / sizeof(k_pages_ip[0]); i++) {
         const IPAddress ip(k_pages_ip[i][0], k_pages_ip[i][1],
                            k_pages_ip[i][2], k_pages_ip[i][3]);
@@ -287,18 +286,24 @@ static bool pages_tls_open(WiFiClientSecure &c)
 static bool fetch_manifest(String &body)
 {
     apply_public_dns();
-    WiFiClientSecure c;
-    if (!pages_tls_open(c))
+    /* Heap, not the OTA task stack — WiFiClientSecure is large. */
+    WiFiClientSecure *c = new WiFiClientSecure();
+    if (!c)
         return false;
+    if (!pages_tls_open(*c)) {
+        delete c;
+        return false;
+    }
     char req[256];
     snprintf(req, sizeof(req),
-             "GET /mm1-black/latest.json HTTP/1.1\r\nHost: %s\r\n"
+             "GET /mm1-black/latest.json HTTP/1.0\r\nHost: %s\r\n"
              "User-Agent: MM1-BLACK\r\nAccept: */*\r\n"
              "Connection: close\r\n\r\n",
              k_pages_host);
-    c.print(req);
-    const bool ok = read_http_body(c, body, 15000);
-    c.stop();
+    c->print(req);
+    const bool ok = read_http_body(*c, body, 12000);
+    c->stop();
+    delete c;
     return ok;
 }
 
@@ -604,7 +609,12 @@ static bool https_pages_install(const char *path)
 
     snprintf(g_status, sizeof(g_status), "Installing... 1%%");
     g_pct = 1;
-    WiFiClientSecure sock;
+    WiFiClientSecure *psock = new WiFiClientSecure();
+    if (!psock) {
+        heap_caps_free(img);
+        return false;
+    }
+    WiFiClientSecure &sock = *psock;
     bool open = false;
     size_t got_all = 0;
     while ((int)got_all < total) {
@@ -633,6 +643,7 @@ static bool https_pages_install(const char *path)
         if (!ok) {
             Serial.printf("[OTA] range %d fail\n", off);
             sock.stop();
+            delete psock;
             heap_caps_free(img);
             return false;
         }
@@ -641,6 +652,7 @@ static bool https_pages_install(const char *path)
         yield();
     }
     sock.stop();
+    delete psock;
     const bool flashed = ota_flash_image(img, got_all);
     heap_caps_free(img);
     return flashed;
@@ -760,8 +772,11 @@ void fw_gh_ota_poll(void)
     g_busy_since = millis();
     g_live_job = j;
     g_task_live = true;
-    const BaseType_t ok = xTaskCreate(
-        ota_task, "mm1_ota", 49152, (void *)(uintptr_t)j, 1, nullptr);
+    BaseType_t ok = xTaskCreate(
+        ota_task, "mm1_ota", 32768, (void *)(uintptr_t)j, 1, nullptr);
+    if (ok != pdPASS)
+        ok = xTaskCreate(
+            ota_task, "mm1_ota", 20480, (void *)(uintptr_t)j, 1, nullptr);
     if (ok != pdPASS) {
         g_task_live = false;
         g_busy = false;
