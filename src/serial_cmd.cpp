@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <ctype.h>
 #include "firmware_version.h"
+#include "mm1_log.h"
 
 static char g_cmd_buf[32];
 
@@ -33,6 +34,9 @@ void serial_cmd_poll(void)
                 } else if (strcmp(g_cmd_buf, "WIFI_JOIN") == 0) {
                     Serial.println("MM1_WIFI=JOIN");
                     mm1_on_serial_wifi_join();
+                } else if (strcmp(g_cmd_buf, "LOG") == 0) {
+                    Serial.print("MM1_LOG=");
+                    Serial.println(mm1_log_ready() ? mm1_log_path() : "off");
                 }
             }
             g_cmd_len = 0;

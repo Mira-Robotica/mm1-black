@@ -62,6 +62,7 @@
 #include "sap6_ble.h"
 #include "fw_update_url.h"
 #include "fw_gh_ota.h"
+#include "mm1_log.h"
 #include "serial_cmd.h"
 #endif
 
@@ -2785,6 +2786,8 @@ static void ble_csv_tx_ui_update(const char *line1)
 
 static void ble_csv_tx_finish(bool ok)
 {
+    const int total = g_tx_total;
+    const uint32_t acked = sap6_ble_acks_ok() - g_tx_acks_base;
     g_tx_pending_start = false;
     ble_csv_tx_sd_stream_close();
     sap6_ble_stream_cancel();
@@ -2803,14 +2806,17 @@ static void ble_csv_tx_finish(bool ok)
     g_tx_use_ram = false;
     char b[72];
     if (ok) {
-        const uint32_t acked = sap6_ble_acks_ok() - g_tx_acks_base;
         snprintf(b, sizeof(b), LV_SYMBOL_OK " STREAM fim %lu/%d",
-                 (unsigned long)acked, g_tx_total > 0 ? g_tx_total : (int)acked);
+                 (unsigned long)acked, total > 0 ? total : (int)acked);
     } else {
         snprintf(b, sizeof(b), LV_SYMBOL_WARNING " STREAM cancelled");
     }
     ble_csv_tx_ui_hide();
     set_fstatus(b);
+#ifdef ARDUINO_ARCH_ESP32
+    mm1_log_event("BLE", "tx %s legs=%d ack=%lu",
+                  ok ? "ok" : "cancel", total, (unsigned long)acked);
+#endif
 }
 
 static void ble_csv_tx_cancel(void)
@@ -3875,6 +3881,7 @@ static void setup_wifi_off_cb(lv_event_t *e)
 #endif
     refresh_setup_wifi_display();
     set_fstatus("Wi-Fi off");
+    mm1_log_event("WIFI", "off");
     play_button_ack();
 }
 
@@ -3926,6 +3933,7 @@ static void setup_wifi_check_cb(lv_event_t *e)
     snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Looking for updates…");
     refresh_setup_wifi_display();
     fw_gh_ota_request_check();
+    mm1_log_event("OTA", "check");
     play_button_ack();
 }
 
@@ -3953,10 +3961,11 @@ static void setup_wifi_install_cb(lv_event_t *e)
         return;
     }
     fw_gh_ota_bind_sta();
-    snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Installing — keep the tape on");
+    snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Installing - keep the tape on");
     refresh_setup_wifi_display();
     lv_timer_handler();
     fw_gh_ota_request_install();
+    mm1_log_event("OTA", "install bat=%d", bat_pct);
     play_button_ack();
 }
 
@@ -3994,30 +4003,19 @@ static void wifi_start_service(void)
             snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Connected");
             Serial.printf("[WiFi] STA %s  IP %s\n",
                           g_sta_ssid, WiFi.localIP().toString().c_str());
+            mm1_log_event("WIFI", "join ok ssid=%s ip=%s",
+                          g_sta_ssid, WiFi.localIP().toString().c_str());
             g_wifi_last_check = millis();
-            g_wifi_check_due = millis() + 8000UL;
+            g_wifi_check_due = 0;
             refresh_setup_wifi_display();
             set_fstatus("Connected");
         } else if (millis() - g_wifi_sta_begin_at > 18000UL) {
             g_wifi_sta_wait = false;
             snprintf(g_wifi_ap_note, sizeof(g_wifi_ap_note), "Could not join");
+            mm1_log_fail("wifi join ssid=%s", g_sta_ssid);
             refresh_setup_wifi_display();
             set_fstatus("Join failed");
         }
-    }
-
-    if (g_wifi_check_due && (long)(millis() - g_wifi_check_due) >= 0 &&
-        WiFi.status() == WL_CONNECTED && !fw_gh_ota_busy()) {
-        g_wifi_check_due = 0;
-        fw_gh_ota_bind_sta();
-        fw_gh_ota_request_check();
-        g_wifi_last_check = millis();
-    }
-
-    if (WiFi.status() == WL_CONNECTED && !fw_gh_ota_busy() &&
-        g_wifi_last_check && (millis() - g_wifi_last_check) > 3600000UL) {
-        g_wifi_last_check = millis();
-        fw_gh_ota_request_check();
     }
 
     if (g_wifi_job == WIFI_JOB_NONE || (long)(millis() - g_wifi_job_at) < 0)
@@ -4396,6 +4394,8 @@ static void add_point(PtType type, bool sync_laser_before)
     refresh_table_after_point_change();
 #if defined(ARDUINO_ARCH_ESP32)
     sap6_ble_send_leg(norm_deg360(p.yaw), p.pitch, p.roll, p.dist);
+    mm1_log_event("SHOT", "id=%u type=%c dist=%.3f",
+                  (unsigned)p.id, type == PT_NAV ? 'N' : 'S', (double)p.dist);
 #endif
     char buf[56];
     if (g_sd_spill_count > 0)
@@ -4430,6 +4430,9 @@ static void add_nav_triple(void)
     if (!lzr_measure_once_blocking()) {
         play_error_sound();
         cap_ui_result_pulse(false);
+#ifdef ARDUINO_ARCH_ESP32
+        mm1_log_fail("nav laser timeout");
+#endif
         set_fstatus(LV_SYMBOL_WARNING " Nav: no laser");
         return;
     }
@@ -4528,6 +4531,9 @@ static void btn_new_file_cb(lv_event_t *e)
     File f=SD.open(path,FILE_WRITE);
     if (f) { f.println(TD_CSV_HEADER); f.close(); }
     strlcpy(active_csv,path,sizeof(active_csv));
+#ifdef ARDUINO_ARCH_ESP32
+    mm1_log_event("FILE", "new %s", path);
+#endif
     pt_count=0; sel_row=-1; next_id=1;
     g_pt_page=0; g_file_pt_total=0; g_sd_spill_count=0;
     g_prefix_bytes=0; g_file_tail_pts=0;
@@ -4551,6 +4557,9 @@ static void btn_del_file_cb(lv_event_t *e)
     if (file_sel<0||file_sel>=file_count) { set_fstatus(LV_SYMBOL_WARNING " Select file!"); return; }
     char path[32]; strlcpy(path,file_names[file_sel],sizeof(path));
     bool was_act = strcmp(path,active_csv)==0;
+#ifdef ARDUINO_ARCH_ESP32
+    mm1_log_event("FILE", "del %s", path);
+#endif
     SD.remove(path); file_sel=-1; refresh_file_list();
     if (was_act) {
         if (file_count>0) strlcpy(active_csv,file_names[0],sizeof(active_csv));
@@ -4645,8 +4654,11 @@ static void refresh_setup_wifi_display(void)
         snprintf(notice, sizeof(notice), "%s\nKeep the tape on.", st);
         ncol = C_WARN;
     } else if (busy) {
-        snprintf(notice, sizeof(notice), "%s", st[0] ? st : "Looking for updates…");
+        snprintf(notice, sizeof(notice), "%s", st[0] ? st : "Looking for updates...");
         ncol = C_BTN_BT;
+    } else if (st[0] && strstr(st, "Could not")) {
+        snprintf(notice, sizeof(notice), "%s", st);
+        ncol = C_WARN;
     } else if (newer && fw_gh_ota_latest_tag()[0]) {
         snprintf(notice, sizeof(notice),
                  "New firmware %s\nTap Install to update.",
@@ -4908,6 +4920,15 @@ static void tabview_changed_cb(lv_event_t *e)
     }
     lzr_sync_poll_gap_now();
     lzr_next_poll_ms = millis();
+#ifdef ARDUINO_ARCH_ESP32
+    {
+        static const char *tn[TAB_COUNT] = {
+            "POINTS", "VIEW", "SENSOR", "FILES", "SETUP"
+        };
+        mm1_log_event("TAB", "%s",
+                      (tab < TAB_COUNT) ? tn[tab] : "?");
+    }
+#endif
     if (tab == TAB_VIEW) {
         view_invalidate();
     } else if (tab == TAB_SENSOR) {
@@ -4932,6 +4953,13 @@ static void update_status()
 {
 #ifdef ARDUINO_ARCH_ESP32
     bt_conn = g_bt_stack_ready && sap6_ble_connected();
+    {
+        static int8_t was = -1;
+        const int8_t now = bt_conn ? 1 : 0;
+        if (was >= 0 && now != was)
+            mm1_log_event("BLE", now ? "link" : "drop");
+        was = now;
+    }
     if (!g_bt_stack_ready) {
         lv_label_set_text(ui_lbl_bt, LV_SYMBOL_BLUETOOTH);
         lv_obj_set_style_text_color(ui_lbl_bt, lv_color_hex(C_BT_OFF), 0);
@@ -4987,6 +5015,9 @@ static void update_status()
     lv_obj_set_style_text_color(ui_lbl_sd, lv_color_hex(sd_ready?C_SD_ON:C_SD_OFF), 0);
 
     read_battery();
+#ifdef ARDUINO_ARCH_ESP32
+    mm1_log_battery(bat_pct, g_bat_v);
+#endif
     {
         const int bw = UI_TALL ? 36 : 26;
         const int bh = UI_TALL ? 18 : 13;
@@ -5373,6 +5404,7 @@ static void setup_vol_slider_cb(lv_event_t *e)
     if (code == LV_EVENT_RELEASED) {
         prefs_save_volume();
 #ifdef ARDUINO_ARCH_ESP32
+        mm1_log_event("VOL", "pct=%u", (unsigned)g_volume_pct);
         play_button_ack();
 #endif
     }
@@ -7379,6 +7411,7 @@ static void show_boot_splash_tft(void)
 void setup()
 {
 #ifdef ARDUINO_ARCH_ESP32
+    fw_gh_ota_mark_boot_ok();
 #if LZR_SHARE_USB_UART
     esp_log_level_set("*", ESP_LOG_NONE);
 #endif
@@ -7503,6 +7536,15 @@ void setup()
     refresh_setup_bt_status();
     set_fstatus(g_bt_stack_ready ? "Ready" : "Radio off");
 #endif
+#ifdef ARDUINO_ARCH_ESP32
+    mm1_log_begin(sd_ready);
+    mm1_log_event("HW", "imu=%s laser=%s ble=%s mac=%s sd=%s",
+                  imu_ok ? "ok" : "fail",
+                  tof_ok ? "ok" : "fail",
+                  g_bt_stack_ready ? "ok" : "off",
+                  g_bt_local_mac,
+                  sd_ready ? "ok" : "fail");
+#endif
 #if !LZR_SHARE_USB_UART
     Serial.println("[MM1-BLACK] Ready");
 #endif
@@ -7557,6 +7599,9 @@ static void user_btn_cap_do_capture(void)
     if (!got) {
         play_error_sound();
         cap_ui_result_pulse(false);
+#ifdef ARDUINO_ARCH_ESP32
+        mm1_log_fail("laser timeout rx=%lu", (unsigned long)lzr_rx_bytes_total);
+#endif
         char buf[72];
         snprintf(buf, sizeof(buf),
                  LV_SYMBOL_WARNING " No reading (rx=%lu) - SETUP Sensor?",
@@ -7596,6 +7641,9 @@ static void user_btn_on_down(void)
     g_nav_hold_fired = false;
     g_ignore_btn_up = false;
 
+#ifdef ARDUINO_ARCH_ESP32
+    mm1_log_event("BTN", "down mode=%u", (unsigned)g_shot_mode);
+#endif
     if (g_shot_mode == SHOT_CONT) {
         if (g_cont_active) {
             shot_cont_stop(LV_SYMBOL_CLOSE " Continuous off");
@@ -7738,30 +7786,46 @@ void loop()
     ble_csv_tx_poll();
     sap6_process_pending_cmds();
     wifi_start_service();
+    web_portal::loop();
+#endif
+
+    lv_timer_handler();
+#ifdef ARDUINO_ARCH_ESP32
     {
         static char ota_seen[80] = "";
         static int ota_pct_seen = -1;
         fw_gh_ota_poll();
         if (strcmp(ota_seen, fw_gh_ota_status()) != 0 ||
             ota_pct_seen != fw_gh_ota_percent()) {
+            const bool status_chg = (strcmp(ota_seen, fw_gh_ota_status()) != 0);
             snprintf(ota_seen, sizeof(ota_seen), "%s", fw_gh_ota_status());
             ota_pct_seen = fw_gh_ota_percent();
             refresh_setup_wifi_display();
             refresh_setup_about_display();
-            if (fw_gh_ota_newer())
+            if (strstr(ota_seen, "Installing"))
+                set_fstatus(ota_seen);
+            else if (strstr(ota_seen, "Could not"))
+                set_fstatus("Could not install");
+            else if (fw_gh_ota_newer())
                 set_fstatus("New firmware");
             else if (strstr(ota_seen, "up to date"))
                 set_fstatus("Up to date");
+            if (status_chg) {
+                const bool inst = strstr(ota_seen, "Installing") != nullptr;
+                if (!inst || ota_pct_seen == 0 || ota_pct_seen >= 99 ||
+                    (ota_pct_seen % 25) == 0)
+                    mm1_log_event("OTA", "%s", ota_seen);
+                if (strstr(ota_seen, "Could not") || strstr(ota_seen, "fail"))
+                    mm1_log_fail("ota %s", ota_seen);
+            }
         }
-        if (!g_ota_boot_ok && millis() > 8000UL) {
+        if (!g_ota_boot_ok && millis() > 1500UL) {
             g_ota_boot_ok = true;
             fw_gh_ota_mark_boot_ok();
         }
     }
-    web_portal::loop();
+    mm1_log_poll();
 #endif
-
-    lv_timer_handler();
     pts_table_refresh_service();
 #ifdef ARDUINO_ARCH_ESP32
     csv_load_service();
