@@ -19,3 +19,11 @@ texput.log
 
 # Backup gerado pelo build do ESP32_Display_Panel ao reescrever o manifesto IDF
 src/idf_component.yml.orig
+
+# pioarduino HybridCompile (custom_sdkconfig) — generated locally
+sdkconfig
+sdkconfig.old
+sdkconfig.defaults
+sdkconfig.defaults.orig
+dependencies.lock
+managed_components/

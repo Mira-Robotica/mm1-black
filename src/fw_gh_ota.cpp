@@ -6,12 +6,15 @@
 #include <HTTPClient.h>
 #include <Update.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
 #include <WiFiClient.h>
 #include <string.h>
 #include <stdlib.h>
 #include <lwip/dns.h>
 #include <lwip/ip_addr.h>
+#include <lwip/api.h>
+#include <lwip/tcp.h>
+#include <lwip/tcpip.h>
+#include <lwip/priv/tcp_priv.h>
 #include <esp_netif.h>
 #include <esp_ota_ops.h>
 #include "freertos/FreeRTOS.h"
@@ -19,6 +22,13 @@
 #include "firmware_version.h"
 #include "mm1_log.h"
 #include <esp_heap_caps.h>
+#include <new>
+#include "mbedtls/platform.h"
+#include "mbedtls/ssl.h"
+#include "mbedtls/entropy.h"
+#include "mbedtls/ctr_drbg.h"
+#include "mbedtls/error.h"
+#include "mbedtls/net_sockets.h"
 
 static void apply_public_dns(void)
 {
@@ -133,6 +143,7 @@ bool json_str_after(const char *json, const char *anchor, const char *key,
 }
 
 int  g_http_code = 0;
+static int find_hdr_end(const uint8_t *b, int n);
 
 void http_status_from_code(int code)
 {
@@ -165,9 +176,13 @@ void http_prep(HTTPClient &http, int timeout_ms)
 }
 
 /* GitHub Pages (Fastly). Avoid Hosted UDP DNS — it fails on the C6 path. */
+
+static void tls_buffers_psram(bool on);
+
 static const uint8_t k_pages_ip[][4] = {
-    {185, 199, 108, 153},
     {185, 199, 110, 153},
+    {185, 199, 108, 153},
+    {185, 199, 109, 153},
     {185, 199, 111, 153},
 };
 
@@ -233,20 +248,362 @@ static bool http_plain_get(const IPAddress &ip, uint16_t port, const char *host,
     return ok;
 }
 
+static const char *k_pages_host = "verlab.github.io";
+
+/* Arduino P4 mbedtls is CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC: ssl_setup
+ * wants ~32 KB DRAM and fails with -32512 (ALLOC_FAILED). */
+static void *ota_ssl_calloc(size_t n, size_t sz)
+{
+    void *p = heap_caps_calloc(n, sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!p)
+        p = heap_caps_calloc(n, sz, MALLOC_CAP_8BIT);
+    return p;
+}
+
+static void ota_ssl_free(void *p)
+{
+    heap_caps_free(p);
+}
+
+static void *dram_ssl_calloc(size_t n, size_t sz)
+{
+    return heap_caps_calloc(n, sz, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+}
+
+static void tls_buffers_psram(bool on)
+{
+    if (on)
+        mbedtls_platform_set_calloc_free(ota_ssl_calloc, ota_ssl_free);
+    else
+        mbedtls_platform_set_calloc_free(dram_ssl_calloc, ota_ssl_free);
+}
+
+/* P4 SYN advertises TCP_WND=64 KB. Fastly then dumps the Pages cert chain
+ * and the C6 SDIO path drops it. Shrink THIS pcb after ESTABLISHED, before
+ * ClientHello — only via tcpip_callback (no core lock on this build). */
+#ifndef PAGES_TCP_WND
+#define PAGES_TCP_WND 4096
+#endif
+#ifndef PAGES_TCP_WND_BODY
+#define PAGES_TCP_WND_BODY 2048
+#endif
+
+struct ClampJob {
+    uint32_t ip4;
+    uint16_t rport;
+    uint16_t wnd;
+    volatile int done;
+    int ok;
+};
+
+static void pages_clamp_cb(void *arg)
+{
+    ClampJob *j = (ClampJob *)arg;
+    for (struct tcp_pcb *p = tcp_active_pcbs; p; p = p->next) {
+        if (p->state != ESTABLISHED || p->remote_port != j->rport)
+            continue;
+        if (ip_addr_get_ip4_u32(&p->remote_ip) != j->ip4)
+            continue;
+        if (p->rcv_wnd > j->wnd)
+            p->rcv_wnd = (tcpwnd_size_t)j->wnd;
+        p->rcv_ann_wnd = (tcpwnd_size_t)j->wnd;
+        p->rcv_ann_right_edge = p->rcv_nxt + j->wnd;
+        p->flags |= TF_ACK_NOW;
+        tcp_output(p);
+        j->ok = 1;
+        break;
+    }
+    j->done = 1;
+}
+
+static bool pages_clamp_wnd(const IPAddress &ip)
+{
+    ClampJob j = {};
+    j.ip4 = (uint32_t)ip;
+    j.rport = 443;
+    j.wnd = (uint16_t)PAGES_TCP_WND;
+    if (tcpip_callback(pages_clamp_cb, &j) != ERR_OK)
+        return false;
+    const uint32_t t0 = millis();
+    while (!j.done && (millis() - t0) < 400UL)
+        delay(1);
+    Serial.printf("[OTA] wnd %u ip=%s ok=%d\n",
+                  (unsigned)j.wnd, ip.toString().c_str(), j.ok);
+    return j.ok != 0;
+}
+
+/* tcp_recved grows the window back to 64 KB. Re-cap without blocking. */
+static volatile uint32_t g_kick_ip4;
+static volatile int      g_kick_busy;
+
+static void pages_clamp_kick_cb(void *arg)
+{
+    (void)arg;
+    ClampJob j;
+    j.ip4 = g_kick_ip4;
+    j.rport = 443;
+    j.wnd = (uint16_t)PAGES_TCP_WND_BODY;
+    j.done = 0;
+    j.ok = 0;
+    pages_clamp_cb(&j);
+    g_kick_busy = 0;
+}
+
+static void pages_clamp_kick(const IPAddress &ip)
+{
+    if (g_kick_busy)
+        return;
+    g_kick_ip4 = (uint32_t)ip;
+    g_kick_busy = 1;
+    if (tcpip_callback(pages_clamp_kick_cb, nullptr) != ERR_OK)
+        g_kick_busy = 0;
+}
+
+static int pages_bio_send(void *ctx, const unsigned char *buf, size_t len)
+{
+    WiFiClient *c = (WiFiClient *)ctx;
+    const int n = c->write(buf, len);
+    if (n > 0)
+        return n;
+    if (!c->connected())
+        return MBEDTLS_ERR_NET_CONN_RESET;
+    return MBEDTLS_ERR_SSL_WANT_WRITE;
+}
+
+static int pages_bio_recv(void *ctx, unsigned char *buf, size_t len)
+{
+    WiFiClient *c = (WiFiClient *)ctx;
+    const int avail = c->available();
+    if (avail <= 0) {
+        if (!c->connected())
+            return 0;
+        return MBEDTLS_ERR_SSL_WANT_READ;
+    }
+    const size_t want = ((size_t)avail < len) ? (size_t)avail : len;
+    const int n = c->read(buf, want);
+    if (n > 0)
+        return n;
+    if (!c->connected())
+        return 0;
+    return MBEDTLS_ERR_SSL_WANT_READ;
+}
+
+class PagesTls : public Client {
+public:
+    WiFiClient tcp;
+    mbedtls_ssl_context ssl;
+    mbedtls_ssl_config cfg;
+    mbedtls_entropy_context entropy;
+    mbedtls_ctr_drbg_context drbg;
+    bool ready = false;
+    int last_mbed = 0;
+
+    PagesTls()
+    {
+        mbedtls_ssl_init(&ssl);
+        mbedtls_ssl_config_init(&cfg);
+        mbedtls_entropy_init(&entropy);
+        mbedtls_ctr_drbg_init(&drbg);
+    }
+
+    ~PagesTls() { close_all(false); }
+
+    void close_all(bool reinit = true)
+    {
+        if (ready) {
+            mbedtls_ssl_close_notify(&ssl);
+            ready = false;
+        }
+        tcp.stop();
+        mbedtls_ssl_free(&ssl);
+        mbedtls_ssl_config_free(&cfg);
+        mbedtls_ctr_drbg_free(&drbg);
+        mbedtls_entropy_free(&entropy);
+        if (!reinit)
+            return;
+        mbedtls_ssl_init(&ssl);
+        mbedtls_ssl_config_init(&cfg);
+        mbedtls_entropy_init(&entropy);
+        mbedtls_ctr_drbg_init(&drbg);
+    }
+
+    bool open(const IPAddress &ip, const char *sni)
+    {
+        close_all();
+        last_mbed = 0;
+        tcp.setTimeout(15000);
+        Serial.printf("[OTA] tcp443 %s\n", ip.toString().c_str());
+        if (!tcp.connect(ip, 443)) {
+            snprintf(g_status, sizeof(g_status), "GitHub TCP failed");
+            Serial.println("[OTA] tcp fail");
+            return false;
+        }
+        (void)pages_clamp_wnd(ip);
+        delay(40);
+
+        const unsigned char pers[] = "mm1-pages";
+        int ret = mbedtls_ctr_drbg_seed(&drbg, mbedtls_entropy_func, &entropy,
+                                        pers, sizeof(pers) - 1);
+        if (ret) {
+            last_mbed = ret;
+            goto fail;
+        }
+        ret = mbedtls_ssl_config_defaults(&cfg, MBEDTLS_SSL_IS_CLIENT,
+                                          MBEDTLS_SSL_TRANSPORT_STREAM,
+                                          MBEDTLS_SSL_PRESET_DEFAULT);
+        if (ret) {
+            last_mbed = ret;
+            goto fail;
+        }
+        mbedtls_ssl_conf_authmode(&cfg, MBEDTLS_SSL_VERIFY_NONE);
+        mbedtls_ssl_conf_rng(&cfg, mbedtls_ctr_drbg_random, &drbg);
+#ifdef MBEDTLS_SSL_PROTO_TLS1_2
+#ifdef MBEDTLS_SSL_VERSION_TLS1_2
+        mbedtls_ssl_conf_min_tls_version(&cfg, MBEDTLS_SSL_VERSION_TLS1_2);
+        mbedtls_ssl_conf_max_tls_version(&cfg, MBEDTLS_SSL_VERSION_TLS1_2);
+#endif
+#endif
+#ifdef MBEDTLS_SSL_MAX_FRAGMENT_LENGTH
+        (void)mbedtls_ssl_conf_max_frag_len(&cfg, MBEDTLS_SSL_MAX_FRAG_LEN_2048);
+#endif
+        ret = mbedtls_ssl_setup(&ssl, &cfg);
+        if (ret) {
+            last_mbed = ret;
+            goto fail;
+        }
+        if (sni && sni[0])
+            (void)mbedtls_ssl_set_hostname(&ssl, sni);
+        mbedtls_ssl_set_bio(&ssl, &tcp, pages_bio_send, pages_bio_recv, nullptr);
+
+        {
+            const uint32_t t0 = millis();
+            while ((ret = mbedtls_ssl_handshake(&ssl)) != 0) {
+                if (ret != MBEDTLS_ERR_SSL_WANT_READ &&
+                    ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
+                    last_mbed = ret;
+                    goto fail;
+                }
+                if (millis() - t0 > 25000UL) {
+                    last_mbed = 0;
+                    snprintf(g_status, sizeof(g_status), "GitHub TLS time");
+                    Serial.println("[OTA] tls time");
+                    close_all();
+                    return false;
+                }
+                delay(2);
+            }
+        }
+        ready = true;
+        Serial.println("[OTA] tls ok");
+        return true;
+
+    fail:
+        if (last_mbed)
+            snprintf(g_status, sizeof(g_status), "GitHub TLS %d", last_mbed);
+        else
+            snprintf(g_status, sizeof(g_status), "GitHub TLS failed");
+        Serial.printf("[OTA] tls fail %d\n", last_mbed);
+        close_all();
+        return false;
+    }
+
+    int connect(IPAddress, uint16_t) override { return 0; }
+    int connect(const char *, uint16_t) override { return 0; }
+
+    size_t write(uint8_t b) override { return write(&b, 1); }
+    size_t write(const uint8_t *buf, size_t size) override
+    {
+        if (!ready || !buf || !size)
+            return 0;
+        size_t sent = 0;
+        const uint32_t t0 = millis();
+        while (sent < size && millis() - t0 < 15000UL) {
+            const int n = mbedtls_ssl_write(&ssl, buf + sent, size - sent);
+            if (n > 0) {
+                sent += (size_t)n;
+                continue;
+            }
+            if (n != MBEDTLS_ERR_SSL_WANT_READ &&
+                n != MBEDTLS_ERR_SSL_WANT_WRITE) {
+                last_mbed = n;
+                return sent;
+            }
+            delay(2);
+        }
+        return sent;
+    }
+
+    int available() override
+    {
+        if (!ready)
+            return 0;
+        const size_t have = mbedtls_ssl_get_bytes_avail(&ssl);
+        if (have)
+            return (int)have;
+        return tcp.available() ? 1 : 0;
+    }
+
+    int read() override
+    {
+        uint8_t b = 0;
+        const int n = read(&b, 1);
+        return (n == 1) ? (int)b : -1;
+    }
+
+    int read(uint8_t *buf, size_t size) override
+    {
+        if (!ready || !buf || !size)
+            return -1;
+        const int n = mbedtls_ssl_read(&ssl, buf, size);
+        if (n > 0)
+            return n;
+        if (n == MBEDTLS_ERR_SSL_WANT_READ ||
+            n == MBEDTLS_ERR_SSL_WANT_WRITE ||
+            n == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY)
+            return -1;
+        last_mbed = n;
+        return -1;
+    }
+
+    int peek() override { return -1; }
+    void flush() override { tcp.flush(); }
+    void stop() override { close_all(); }
+    uint8_t connected() override { return ready && tcp.connected(); }
+    operator bool() override { return connected() != 0; }
+};
+
+static PagesTls *pages_tls_new(void)
+{
+    void *mem = heap_caps_malloc(sizeof(PagesTls),
+                                 MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!mem)
+        mem = malloc(sizeof(PagesTls));
+    if (!mem)
+        return nullptr;
+    return new (mem) PagesTls();
+}
+
+static void pages_tls_del(PagesTls *t)
+{
+    if (!t)
+        return;
+    t->~PagesTls();
+    heap_caps_free(t);
+}
+
 static bool https_ip_get(const IPAddress &ip, const char *host, const char *path,
                          String &body, int timeout_ms)
 {
-    WiFiClientSecure *cli = new WiFiClientSecure();
-    if (!cli)
+    tls_buffers_psram(true);
+    PagesTls *cli = pages_tls_new();
+    if (!cli) {
+        tls_buffers_psram(false);
         return false;
-    cli->setInsecure();
-    cli->setHandshakeTimeout(15);
-    cli->setTimeout((uint32_t)timeout_ms);
+    }
     Serial.printf("[OTA] https %s %s\n", ip.toString().c_str(), path);
-    const bool opened = cli->connect(ip, 443, host, nullptr, nullptr, nullptr);
     bool ok = false;
-    if (!opened) {
-        Serial.println("[OTA] tls fail");
+    if (!cli->open(ip, host)) {
+        /* open() already filled g_status */
     } else {
         char req[256];
         snprintf(req, sizeof(req),
@@ -256,29 +613,20 @@ static bool https_ip_get(const IPAddress &ip, const char *host, const char *path
         cli->print(req);
         ok = read_http_body(*cli, body, timeout_ms);
     }
-    delete cli;
+    pages_tls_del(cli);
+    tls_buffers_psram(false);
     return ok;
 }
 
-static const char *k_pages_host = "verlab.github.io";
-
-static bool pages_tls_open(WiFiClientSecure &c)
+static bool pages_tls_any(PagesTls &cli)
 {
-    c.stop();
-    c.setInsecure();
-    c.setHandshakeTimeout(12);
-    c.setTimeout(12000);
     for (unsigned i = 0; i < sizeof(k_pages_ip) / sizeof(k_pages_ip[0]); i++) {
         const IPAddress ip(k_pages_ip[i][0], k_pages_ip[i][1],
                            k_pages_ip[i][2], k_pages_ip[i][3]);
-        Serial.printf("[OTA] tls %s\n", ip.toString().c_str());
-        if (c.connect(ip, 443, k_pages_host, nullptr, nullptr, nullptr)) {
-            Serial.println("[OTA] tls ok");
+        if (cli.open(ip, k_pages_host))
             return true;
-        }
-        Serial.println("[OTA] tls fail");
-        c.stop();
-        delay(40);
+        cli.stop();
+        delay(400);
     }
     return false;
 }
@@ -286,25 +634,15 @@ static bool pages_tls_open(WiFiClientSecure &c)
 static bool fetch_manifest(String &body)
 {
     apply_public_dns();
-    /* Heap, not the OTA task stack — WiFiClientSecure is large. */
-    WiFiClientSecure *c = new WiFiClientSecure();
-    if (!c)
-        return false;
-    if (!pages_tls_open(*c)) {
-        delete c;
-        return false;
-    }
-    char req[256];
-    snprintf(req, sizeof(req),
-             "GET /mm1-black/latest.json HTTP/1.0\r\nHost: %s\r\n"
-             "User-Agent: MM1-BLACK\r\nAccept: */*\r\n"
-             "Connection: close\r\n\r\n",
-             k_pages_host);
-    c->print(req);
-    const bool ok = read_http_body(*c, body, 12000);
-    c->stop();
-    delete c;
-    return ok;
+    delay(300);
+    /* One SYN only: extra Pages IPs wedge the C6 after a TLS fail. */
+    const IPAddress ip(k_pages_ip[0][0], k_pages_ip[0][1],
+                       k_pages_ip[0][2], k_pages_ip[0][3]);
+    if (https_ip_get(ip, k_pages_host, "/mm1-black/latest.json", body, 20000))
+        return true;
+    if (!g_status[0] || strstr(g_status, "Looking"))
+        snprintf(g_status, sizeof(g_status), "Could not reach updates");
+    return false;
 }
 
 void do_check(void)
@@ -460,38 +798,68 @@ static int find_hdr_end(const uint8_t *b, int n)
 #define HTTP_CODE_PARTIAL_CONTENT 206
 #endif
 
-/* Range GET on an already-open keep-alive socket (HTTP or TLS). */
-static bool http_get_range_on(Client &c, const char *host, const char *path,
-                              int off, int end, uint8_t *out, int outsz, int *got)
-{
-    *got = 0;
-    char req[320];
-    snprintf(req, sizeof(req),
-             "GET %s HTTP/1.1\r\nHost: %s\r\nRange: bytes=%d-%d\r\n"
-             "User-Agent: MM1-BLACK\r\nConnection: keep-alive\r\n\r\n",
-             path, host, off, end);
-    if (c.print(req) <= 0)
-        return false;
+#ifndef PAGES_HDR_MAX
+#define PAGES_HDR_MAX 2048
+#endif
 
-    uint8_t acc[640];
+/* Same request shape as Check (HTTP/1.0). off<0 = whole file. */
+static bool http_send_get(Client &c, const char *host, const char *path,
+                          int off, int end)
+{
+    char req[400];
+    if (off < 0) {
+        snprintf(req, sizeof(req),
+                 "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: MM1-BLACK\r\n"
+                 "Accept-Encoding: identity\r\nConnection: close\r\n\r\n",
+                 path, host);
+    } else {
+        snprintf(req, sizeof(req),
+                 "GET %s HTTP/1.0\r\nHost: %s\r\nRange: bytes=%d-%d\r\n"
+                 "User-Agent: MM1-BLACK\r\nAccept-Encoding: identity\r\n"
+                 "Connection: close\r\n\r\n",
+                 path, host, off, end);
+    }
+    const size_t n = strlen(req);
+    return c.write((const uint8_t *)req, n) == n;
+}
+
+/* PagesTls::read is -1 on WANT_READ. Assemble headers in PSRAM. */
+static int http_read_headers(Client &c, int *clen, uint8_t **extra, int *extra_n)
+{
+    *clen = -1;
+    *extra = nullptr;
+    *extra_n = 0;
+    uint8_t *acc = (uint8_t *)heap_caps_malloc(PAGES_HDR_MAX,
+                                               MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!acc)
+        acc = (uint8_t *)malloc(PAGES_HDR_MAX);
+    if (!acc)
+        return 0;
     int acc_n = 0, hdr_end = -1;
     const uint32_t t0 = millis();
-    while (hdr_end < 0 && millis() - t0 < 8000UL && acc_n < (int)sizeof(acc)) {
-        const int r = c.read(acc + acc_n, (int)sizeof(acc) - acc_n);
-        if (r < 0)
-            break;
-        if (r == 0) {
+    while (hdr_end < 0 && millis() - t0 < 15000UL && acc_n < PAGES_HDR_MAX) {
+        const int r = c.read(acc + acc_n, PAGES_HDR_MAX - acc_n);
+        if (r < 0) {
+            if (!c.connected())
+                break;
             delay(2);
+            continue;
+        }
+        if (r == 0) {
+            delay(1);
             continue;
         }
         acc_n += r;
         hdr_end = find_hdr_end(acc, acc_n);
     }
-    if (hdr_end < 0)
-        return false;
+    if (hdr_end < 0) {
+        Serial.printf("[OTA] hdr n=%d\n", acc_n);
+        heap_caps_free(acc);
+        return 0;
+    }
     char save = (char)acc[hdr_end - 1];
     acc[hdr_end - 1] = 0;
-    int code = 0, clen = -1;
+    int code = 0;
     if (!strncmp((char *)acc, "HTTP/", 5)) {
         const char *sp = strchr((char *)acc, ' ');
         code = atoi(sp ? sp + 1 : "0");
@@ -500,35 +868,27 @@ static bool http_get_range_on(Client &c, const char *host, const char *path,
     if (!cl)
         cl = strstr((char *)acc, "content-length:");
     if (cl)
-        clen = atoi(cl + 15);
+        *clen = atoi(cl + 15);
     acc[hdr_end - 1] = (uint8_t)save;
-    if (code != HTTP_CODE_PARTIAL_CONTENT && code != HTTP_CODE_OK)
-        return false;
-    const int want = end - off + 1;
-    if (clen > want + 16 || clen > outsz) {
-        Serial.printf("[OTA] range ignored clen=%d\n", clen);
-        return false;
+    Serial.printf("[OTA] GET -> %d clen=%d hdr=%d\n", code, *clen, hdr_end);
+    *extra_n = acc_n - hdr_end;
+    if (*extra_n < 0)
+        *extra_n = 0;
+    if (*extra_n == 0) {
+        heap_caps_free(acc);
+        return code;
     }
+    memmove(acc, acc + hdr_end, (size_t)*extra_n);
+    *extra = acc;
+    return code;
+}
 
-    int n = acc_n - hdr_end;
-    if (n > outsz)
-        n = outsz;
-    if (n > 0)
-        memcpy(out, acc + hdr_end, (size_t)n);
-    while (n < outsz && (clen < 0 || n < clen) && millis() - t0 < 12000UL) {
-        const int r = c.read(out + n, ((clen > 0) ? clen : outsz) - n);
-        if (r < 0)
-            break;
-        if (r == 0) {
-            if (!c.connected())
-                break;
-            delay(2);
-            continue;
-        }
-        n += r;
-    }
-    *got = n;
-    return (clen > 0) ? (n == clen) : (n == want);
+static int http_read_more(Client &c, uint8_t *out, int outsz)
+{
+    const int r = c.read(out, (size_t)outsz);
+    if (r > 0)
+        return r;
+    return -1;
 }
 
 static bool ota_flash_from_buf(esp_ota_handle_t *h, const uint8_t *p, size_t n)
@@ -599,62 +959,138 @@ static bool https_pages_install(const char *path)
     if (total <= 0)
         return false;
 
-    const int CHUNK = 1024;
+    const IPAddress ip0(k_pages_ip[0][0], k_pages_ip[0][1],
+                        k_pages_ip[0][2], k_pages_ip[0][3]);
+
+    /* Check just closed TLS. Give the C6 a beat before the next SYN. */
+    snprintf(g_status, sizeof(g_status), "Installing...");
+    g_pct = 0;
+    delay(500);
+
+    tls_buffers_psram(true);
+    PagesTls *cli = pages_tls_new();
+    bool opened = false;
+    for (int t = 0; t < 2 && !opened; t++) {
+        if (t)
+            delay(700);
+        opened = cli && cli->open(ip0, k_pages_host);
+    }
+    if (!opened) {
+        Serial.println("[OTA] install tls fail");
+        if (!g_status[0] || strstr(g_status, "Installing") ||
+            strstr(g_status, "Looking"))
+            snprintf(g_status, sizeof(g_status), "Install TLS fail");
+        pages_tls_del(cli);
+        tls_buffers_psram(false);
+        return false;
+    }
+
     uint8_t *img = (uint8_t *)heap_caps_malloc((size_t)total,
                                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!img) {
         Serial.println("[OTA] no PSRAM");
+        snprintf(g_status, sizeof(g_status), "Install no memory");
+        pages_tls_del(cli);
+        tls_buffers_psram(false);
         return false;
     }
-
     snprintf(g_status, sizeof(g_status), "Installing... 1%%");
     g_pct = 1;
-    WiFiClientSecure *psock = new WiFiClientSecure();
-    if (!psock) {
+
+    /* HTTP/1.0 GET; keep the TCP window small or Fastly wedges the C6
+     * around ~60 KB (3%). Stall → close and Range-resume. */
+    size_t got_all = 0;
+    int tries = 0;
+    while ((int)got_all < total && tries < 24) {
+        tries++;
+        if (!cli->connected()) {
+            cli->stop();
+            delay(400);
+            if (!cli->open(ip0, k_pages_host)) {
+                snprintf(g_status, sizeof(g_status), "Install TLS fail");
+                break;
+            }
+        }
+        const int off = (int)got_all;
+        if (!http_send_get(*cli, k_pages_host, path,
+                           (off == 0) ? -1 : off, total - 1)) {
+            snprintf(g_status, sizeof(g_status), "Install send fail");
+            cli->stop();
+            continue;
+        }
+        uint8_t *extra = nullptr;
+        int extra_n = 0, clen = -1;
+        const int code = http_read_headers(*cli, &clen, &extra, &extra_n);
+        if (code != HTTP_CODE_OK && code != HTTP_CODE_PARTIAL_CONTENT) {
+            snprintf(g_status, sizeof(g_status), "Install HTTP %d", code);
+            Serial.printf("[OTA] install HTTP %d off=%d\n", code, off);
+            if (extra)
+                heap_caps_free(extra);
+            cli->stop();
+            if (code == 0)
+                continue;
+            break;
+        }
+        if (off > 0 && code == HTTP_CODE_OK && clen > (total - off + 64)) {
+            snprintf(g_status, sizeof(g_status), "Install range ignored");
+            if (extra)
+                heap_caps_free(extra);
+            break;
+        }
+        if (extra_n > 0) {
+            int take = extra_n;
+            if (take > total - (int)got_all)
+                take = total - (int)got_all;
+            memcpy(img + got_all, extra, (size_t)take);
+            got_all += (size_t)take;
+            heap_caps_free(extra);
+            extra = nullptr;
+            ota_note(got_all, total);
+        }
+        pages_clamp_kick(ip0);
+        uint32_t last_rx = millis();
+        size_t last_clamp = got_all;
+        while ((int)got_all < total) {
+            const int want = ((total - (int)got_all) > 512)
+                                 ? 512 : (total - (int)got_all);
+            const int n = http_read_more(*cli, img + got_all, want);
+            if (n > 0) {
+                got_all += (size_t)n;
+                last_rx = millis();
+                ota_note(got_all, total);
+                if (got_all - last_clamp >= 2048UL) {
+                    pages_clamp_kick(ip0);
+                    last_clamp = got_all;
+                }
+                continue;
+            }
+            if (!cli->connected() || (millis() - last_rx) > 3500UL)
+                break;
+            delay(1);
+        }
+        if ((int)got_all < total) {
+            Serial.printf("[OTA] stall @%lu try=%d\n",
+                          (unsigned long)got_all, tries);
+            cli->stop();
+        }
+    }
+    if ((int)got_all != total) {
+        Serial.printf("[OTA] short %lu / %d\n",
+                      (unsigned long)got_all, total);
+        if (!g_status[0] || strstr(g_status, "Installing"))
+            snprintf(g_status, sizeof(g_status), "Install short %d%%",
+                     (total > 0) ? (int)((got_all * 100UL) / (size_t)total) : 0);
+        pages_tls_del(cli);
         heap_caps_free(img);
+        tls_buffers_psram(false);
         return false;
     }
-    WiFiClientSecure &sock = *psock;
-    bool open = false;
-    size_t got_all = 0;
-    while ((int)got_all < total) {
-        const int off = (int)got_all;
-        int end = off + CHUNK - 1;
-        if (end >= total)
-            end = total - 1;
-        const int want = end - off + 1;
-        int got = 0;
-        bool ok = false;
-        for (int t = 0; t < 4 && !ok; t++) {
-            if (!open || !sock.connected()) {
-                sock.stop();
-                open = pages_tls_open(sock);
-            }
-            if (open)
-                ok = http_get_range_on(sock, k_pages_host, path, off, end,
-                                       img + off, want, &got)
-                     && got == want;
-            if (!ok) {
-                sock.stop();
-                open = false;
-                delay(80);
-            }
-        }
-        if (!ok) {
-            Serial.printf("[OTA] range %d fail\n", off);
-            sock.stop();
-            delete psock;
-            heap_caps_free(img);
-            return false;
-        }
-        got_all += (size_t)got;
-        ota_note(got_all, total);
-        yield();
-    }
-    sock.stop();
-    delete psock;
+    pages_tls_del(cli);
+    tls_buffers_psram(false);
     const bool flashed = ota_flash_image(img, got_all);
     heap_caps_free(img);
+    if (!flashed)
+        snprintf(g_status, sizeof(g_status), "Install flash fail");
     return flashed;
 }
 
@@ -681,7 +1117,8 @@ void do_install(void)
     apply_public_dns();
     Serial.printf("[OTA] install %s\n", path);
     if (!https_pages_install(path)) {
-        snprintf(g_status, sizeof(g_status), "Could not install");
+        if (!g_status[0] || strstr(g_status, "Installing"))
+            snprintf(g_status, sizeof(g_status), "Could not install");
         return;
     }
     g_pct = 100;

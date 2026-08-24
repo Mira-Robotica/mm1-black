@@ -197,6 +197,12 @@ enum ShotMode : uint8_t { SHOT_TWO = 0, SHOT_ONE = 1, SHOT_CONT = 2 };
 #ifndef CONT_SHOT_GAP_MS
 #define CONT_SHOT_GAP_MS 750UL
 #endif
+/* TopoDroid TDSetting.mCloseDistance / DISTOX_CLOSE_DISTANCE default 0.05.
+ * Consecutive shots are the same when |v1-v2|/L1 + |v1-v2|/L2 < 0.05
+ * (manual: 5% leg tolerance). Continuous must not invent nav legs. */
+#ifndef SHOT_CLOSE_FRAC
+#define SHOT_CLOSE_FRAC 0.05f
+#endif
 
 #if defined(MM1_BOARD_P4)
 #define UI_TALL 1
@@ -2124,19 +2130,6 @@ static float view_ang_diff(float a, float b)
     return (d > 180.f) ? (360.f - d) : d;
 }
 
-static bool view_shots_match(const MeasPoint &a, const MeasPoint &b)
-{
-    if (!isfinite(a.dist) || !isfinite(b.dist) || a.dist < 0.f || b.dist < 0.f)
-        return false;
-    if (fabsf(a.dist - b.dist) > 0.05f)
-        return false;
-    if (view_ang_diff(a.yaw, b.yaw) > 3.f)
-        return false;
-    if (fabsf(a.pitch - b.pitch) > 3.f)
-        return false;
-    return true;
-}
-
 static bool view_is_leg_triple(int i)
 {
     if (i < 0 || i + 2 >= pt_count)
@@ -2144,11 +2137,9 @@ static bool view_is_leg_triple(int i)
     const MeasPoint &a = pts[i];
     const MeasPoint &b = pts[i + 1];
     const MeasPoint &c = pts[i + 2];
-    if (a.type == PT_NAV && b.type == PT_NAV && c.type == PT_NAV)
-        return true;
-    if (a.type != PT_SAMPLE || b.type != PT_SAMPLE || c.type != PT_SAMPLE)
-        return false;
-    return view_shots_match(a, b) && view_shots_match(b, c);
+    /* Only Hold-5s nav x3 moves the station. Continuous / 1-tap / 2-tap
+     * samples stay splays even if three in a row look similar. */
+    return a.type == PT_NAV && b.type == PT_NAV && c.type == PT_NAV;
 }
 
 static void view_polar_xyz(float L, float azi_deg, float inc_deg,
@@ -4415,13 +4406,14 @@ static bool shot_differs_from_last(void)
     const float d = laser_used_m();
     if (!tof_ok || !l.laser_ok)
         return true;
-    if (fabsf(d - l.dist) > 0.025f)
-        return true;
-    if (fabsf(imu_azimuth_deg - l.yaw) > 1.2f)
-        return true;
-    if (fabsf(imu_inclination_deg - l.pitch) > 1.2f)
-        return true;
-    return false;
+    float e1, n1, u1, e2, n2, u2;
+    view_polar_xyz(l.dist, l.yaw, l.pitch, &e1, &n1, &u1);
+    view_polar_xyz(d, imu_azimuth_deg, imu_inclination_deg, &e2, &n2, &u2);
+    const float de = e1 - e2, dn = n1 - n2, du = u1 - u2;
+    const float err = sqrtf(de * de + dn * dn + du * du);
+    const float L1 = (l.dist > 0.05f) ? l.dist : 0.05f;
+    const float L2 = (d > 0.05f) ? d : 0.05f;
+    return (err / L1 + err / L2) > SHOT_CLOSE_FRAC;
 }
 
 static void add_nav_triple(void)
@@ -4656,7 +4648,8 @@ static void refresh_setup_wifi_display(void)
     } else if (busy) {
         snprintf(notice, sizeof(notice), "%s", st[0] ? st : "Looking for updates...");
         ncol = C_BTN_BT;
-    } else if (st[0] && strstr(st, "Could not")) {
+    } else if (st[0] && (strstr(st, "Could not") || strstr(st, "fail") ||
+                         strstr(st, "TLS") || strstr(st, "GitHub"))) {
         snprintf(notice, sizeof(notice), "%s", st);
         ncol = C_WARN;
     } else if (newer && fw_gh_ota_latest_tag()[0]) {
@@ -7115,7 +7108,7 @@ static void build_ui()
 
         setup_mk_label_wrap(p_shot,
             "2-tap: aim then capture. 1-tap: one press. Cont: tap start/stop; "
-            "skips repeats. Hold 5s (1/2-tap only) writes nav x3.",
+            "TopoDroid 5% gate, never nav. Hold 5s (1/2-tap only) writes nav x3.",
             UI_FONT_SM, C_GREY, LV_TEXT_ALIGN_LEFT);
 
         ui_lbl_setup_cal_ack = lv_label_create(t_cal);
@@ -7709,7 +7702,7 @@ static void user_btn_cont_tick(unsigned long now)
     if ((now - g_cont_last_ms) < CONT_SHOT_GAP_MS)
         return;
     g_cont_last_ms = now;
-    if (!lzr_measure_once_blocking())
+    if (!lzr_measure_once_blocking() || !tof_ok)
         return;
     if (!shot_differs_from_last()) {
         lzr_last_m = NAN;
@@ -7804,8 +7797,9 @@ void loop()
             refresh_setup_about_display();
             if (strstr(ota_seen, "Installing"))
                 set_fstatus(ota_seen);
-            else if (strstr(ota_seen, "Could not"))
-                set_fstatus("Could not install");
+            else if (strstr(ota_seen, "Could not") || strstr(ota_seen, "fail") ||
+                     strstr(ota_seen, "TLS") || strstr(ota_seen, "GitHub"))
+                set_fstatus(ota_seen);
             else if (fw_gh_ota_newer())
                 set_fstatus("New firmware");
             else if (strstr(ota_seen, "up to date"))
