@@ -436,8 +436,13 @@ static inline uint32_t ucol_file_act(void)
 // TopoDroid-style column header (two spaces before “Measurement Type”).
 #define TD_CSV_HEADER \
     "Time-Stamp, POSIX Time, Index, Distance (meters), Azimuth (deg), Inclination (deg), Dip (deg), Roll (deg), Temperature (Celsius),  Measurement Type, Error Log"
-/** Pontos em RAM / tabela (paginada). Acima disto: spill automatico para SD. */
+/** Pontos em RAM / tabela (paginada). P4 has enough SRAM for a larger
+ * working window; older points remain on SD after this limit. */
+#if defined(MM1_BOARD_P4)
+#define MAX_PTS  1000
+#else
 #define MAX_PTS  100
+#endif
 /** Linhas de dados por pagina na tabela POINTS (issue #14). */
 #define PT_PAGE_ROWS  20
 /** Maximo de legs enviados num unico TX a partir do CSV no SD. */
@@ -713,7 +718,36 @@ static unsigned long g_cont_last_ms     = 0;
 static unsigned long g_btn_down_ms      = 0;
 static bool          g_btn_held         = false;
 static bool          g_nav_hold_fired   = false;
+static bool          g_nav_hold_blocked = false;
 static bool          g_ignore_btn_up    = false;
+/** A continuous laser read blocks the main loop; this lets a second press
+ * stop it while the UART wait is still running. */
+static bool          g_cont_measure_active    = false;
+static bool          g_cont_measure_seen_down = false;
+static volatile bool g_cont_stop_requested    = false;
+
+static bool capture_button_is_down(void)
+{
+#if defined(MM1_BOARD_P4)
+    return p4_btn_pressed();
+#else
+    return digitalRead(USER_BUTTON_PIN) == LOW;
+#endif
+}
+
+/** Called from the blocking continuous laser wait. Do not call the normal
+ * button callbacks here: they can start/stop the same operation recursively. */
+static bool continuous_button_abort_tick(void)
+{
+    if (!g_cont_measure_active)
+        return false;
+    const bool down = capture_button_is_down();
+    const bool pressed = down && !g_cont_measure_seen_down;
+    g_cont_measure_seen_down = down;
+    if (pressed)
+        g_cont_stop_requested = true;
+    return pressed;
+}
 #if defined(MM1_BOARD_P4)
 static char          g_imu_scan_txt[48] = "—";
 #endif
@@ -959,6 +993,14 @@ static void play_capture_sound()
     buzzer_note(2093, 130);
 }
 
+/** New station — distinct lower double-beep, separate from a shot. */
+static void play_nav_sound()
+{
+    buzzer_note(659, 100);
+    delay(28);
+    buzzer_note(330, 180);
+}
+
 /** Invalid laser reading or table full. */
 static void play_error_sound()
 {
@@ -973,6 +1015,7 @@ static void audio_init_hw() {}
 static void play_boot_chime() {}
 static void play_button_ack() {}
 static void play_capture_sound() {}
+static void play_nav_sound() {}
 static void play_error_sound() {}
 #endif
 
@@ -1596,6 +1639,12 @@ static bool lzr_measure_once_blocking(void)
 
         while ((millis() - t0) < tmax) {
             const unsigned long now = millis();
+            if (continuous_button_abort_tick()) {
+                lzr_capture_busy   = false;
+                lzr_one_shot_armed = false;
+                lzr_poll_state     = 0;
+                return false;
+            }
             lzr_loop_tick(now);
             poll_imu();
             cap_ui_tick(now);
@@ -1616,6 +1665,12 @@ static bool lzr_measure_once_blocking(void)
         unsigned long tf = millis();
         while ((millis() - tf) < 600UL) {
             const unsigned long now = millis();
+            if (continuous_button_abort_tick()) {
+                lzr_capture_busy   = false;
+                lzr_one_shot_armed = false;
+                lzr_poll_state     = 0;
+                return false;
+            }
             lzr_process_incoming();
             cap_ui_tick(now);
             lv_timer_handler();
@@ -1649,6 +1704,8 @@ static bool lzr_measure_once_blocking(void)
     tof_ok = false;
     const unsigned long t0 = millis();
     while ((millis() - t0) < 1500UL) {
+        if (continuous_button_abort_tick())
+            return false;
         lzr_process_incoming();
         if (lzr_decode_tick != decode0 && isfinite(lzr_last_m) && lzr_last_m >= 0.001f) {
             lzr_apply_to_globals(millis());
@@ -4434,7 +4491,7 @@ static void add_nav_triple(void)
         set_fstatus(LV_SYMBOL_WARNING " Same shot — move, then hold");
         return;
     }
-    play_capture_sound();
+    play_nav_sound();
     for (int i = 0; i < 3; i++)
         add_point(PT_NAV, false);
     set_fstatus(LV_SYMBOL_OK " Nav x3 (same shot)");
@@ -7557,6 +7614,7 @@ static unsigned long user_btn_last_tap_ms = 0;
 static void user_btn_cap_arm(void)
 {
     user_btn_cap_armed = true;
+    g_nav_hold_blocked = true;
     user_btn_cap_armed_ms = millis();
     lzr_btn_aim_active = true;
     lzr_aim_on();
@@ -7576,6 +7634,7 @@ static void user_btn_cap_disarm(const char *msg)
 static void user_btn_cap_do_capture(void)
 {
     user_btn_cap_armed = false;
+    g_nav_hold_blocked = false;
     /* Keep beam + LASER_ON keepalive during UART measure (do not clear aim yet). */
 
     if (pt_count >= MAX_PTS && !sd_ready) {
@@ -7666,8 +7725,13 @@ static void user_btn_on_up(void)
 {
 #ifdef ARDUINO_ARCH_ESP32
     g_btn_held = false;
-    if (g_nav_hold_fired || g_ignore_btn_up)
+    if (g_nav_hold_fired || g_ignore_btn_up) {
+        /* If the 2-tap aim timed out, this release ends that old sequence;
+         * it must not become a late 5-second navigation hold. */
+        if (!user_btn_cap_armed && !g_nav_hold_fired)
+            g_nav_hold_blocked = false;
         return;
+    }
     if (g_shot_mode == SHOT_CONT)
         return;
     if (g_shot_mode == SHOT_ONE)
@@ -7684,6 +7748,10 @@ static void user_btn_hold_tick(unsigned long now)
     if (!g_btn_held || g_nav_hold_fired)
         return;
     if (!g_nav_hold_en || g_shot_mode == SHOT_CONT)
+        return;
+    /* A 2-tap sequence is already in progress. A long second press must
+     * complete/cancel that sequence, never turn it into a new station. */
+    if (user_btn_cap_armed || g_nav_hold_blocked)
         return;
     if ((now - g_btn_down_ms) < NAV_HOLD_MS)
         return;
@@ -7702,7 +7770,17 @@ static void user_btn_cont_tick(unsigned long now)
     if ((now - g_cont_last_ms) < CONT_SHOT_GAP_MS)
         return;
     g_cont_last_ms = now;
-    if (!lzr_measure_once_blocking() || !tof_ok)
+    g_cont_stop_requested = false;
+    g_cont_measure_active = true;
+    g_cont_measure_seen_down = capture_button_is_down();
+    const bool got = lzr_measure_once_blocking();
+    g_cont_measure_active = false;
+    if (g_cont_stop_requested) {
+        g_cont_stop_requested = false;
+        shot_cont_stop(LV_SYMBOL_CLOSE " Continuous off");
+        return;
+    }
+    if (!got || !tof_ok)
         return;
     if (!shot_differs_from_last()) {
         lzr_last_m = NAN;
