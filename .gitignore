@@ -12,6 +12,12 @@ docs/flasher/bins/
 
 # Cursor IDE — pasta local (memórias, regras experimentais); não versionar
 .cursor/
+.DS_Store
+**/__pycache__/
+/.dummy/
+
+# Sequência 360° experimental substituída pelas dez fotografias finais
+/docs/site/assets/rotation-360/
 
 # Paper IEEE LARS 2026 — fontes, datasets e bags ficam fora do repo de firmware
 paper/

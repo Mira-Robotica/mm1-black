@@ -1,0 +1,213 @@
+/* LVGL-faithful device UI chrome for MM1-BLACK mockups
+   Colors/fonts from firmware main.cpp (Montserrat + C_* palette) */
+@import url("https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700&display=swap");
+
+.gal-screen,
+#mm1-screen {
+  --lv-bg: #E6EDF5;
+  --lv-top: #FFFFFF;
+  --lv-text: #12202C;
+  --lv-grey: #4A6270;
+  --lv-border: #B8C6D0;
+  --lv-hdr: #0F2A4A;
+  --lv-accent: #0B5CAB;
+  --lv-row-even: #E8F0F7;
+  --lv-row-sel: #BBDEFB;
+  --lv-row-nav: #D7F0EC;
+  --lv-font: "Montserrat", "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--lv-font) !important;
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: 0;
+}
+
+.gal-screen[data-theme="dark"],
+#mm1-screen[data-theme="dark"] {
+  --lv-bg: #0E141C;
+  --lv-top: #1A2430;
+  --lv-text: #E8EDF2;
+  --lv-grey: #90A4AE;
+  --lv-border: #3D4F63;
+  --lv-row-even: #152030;
+  --lv-row-sel: #1E3A5F;
+  --lv-row-nav: #1a3532;
+  background: var(--lv-bg) !important;
+  color: var(--lv-text) !important;
+}
+
+.gal-screen,
+#mm1-screen {
+  background: var(--lv-bg) !important;
+  color: var(--lv-text) !important;
+}
+
+.dev-header {
+  background: var(--lv-top) !important;
+  border-bottom: 2px solid var(--lv-accent) !important;
+  font-family: var(--lv-font) !important;
+  padding: 7px 8px 6px !important;
+}
+.dev-title {
+  font-weight: 700 !important;
+  font-size: 11px !important;
+}
+.dev-icons {
+  font-weight: 600 !important;
+  font-size: 9px !important;
+  gap: 6px !important;
+}
+.dev-tabs {
+  background: var(--lv-top) !important;
+  border-bottom: 1px solid var(--lv-border) !important;
+}
+.dev-tab {
+  font-family: var(--lv-font) !important;
+  font-weight: 700 !important;
+  font-size: 9px !important;
+  color: var(--lv-grey) !important;
+  padding: 8px 2px !important;
+}
+.dev-tab.active {
+  color: var(--lv-accent) !important;
+  box-shadow: inset 0 -3px 0 var(--lv-accent) !important;
+}
+
+/* LVGL table look */
+.pts-table,
+.file-table {
+  font-family: var(--lv-font) !important;
+}
+.pts-table th,
+.file-table th {
+  background: var(--lv-hdr) !important;
+  color: #fff !important;
+  font-weight: 600 !important;
+  font-size: 10px !important;
+  padding: 6px 3px !important;
+}
+.pts-table td {
+  font-size: 10px !important;
+  padding: 5px 3px !important;
+  border-bottom: 1px solid var(--lv-border) !important;
+}
+.pts-table tr:nth-child(even) td {
+  background: var(--lv-row-even) !important;
+}
+.pts-table tr.nav td {
+  background: var(--lv-row-nav) !important;
+}
+.pts-table tr.sel td {
+  background: var(--lv-row-sel) !important;
+}
+
+/* LVGL-style rectangular buttons (slight radius) */
+.ab,
+.seg-btn,
+.cal-tile,
+.hold-btn,
+.sub {
+  font-family: var(--lv-font) !important;
+  font-weight: 700 !important;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+}
+
+/* Sensor cards — flat LVGL panels */
+.scard {
+  border-radius: 4px !important;
+  font-family: var(--lv-font) !important;
+}
+.sc-h {
+  font-size: 9px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase;
+}
+.sc-v {
+  font-size: 11px !important;
+  font-weight: 600 !important;
+}
+
+.plot-title,
+.status-line,
+.file-active,
+.hint,
+.bt-status,
+.slider-lab,
+.row-kv,
+.about-brand,
+.about-prod {
+  font-family: var(--lv-font) !important;
+}
+
+/* Device bezel more industrial */
+.gal-device,
+.device-bezel {
+  background: linear-gradient(165deg, #3a3a3a 0%, #1c1c1c 40%, #0d0d0d 100%) !important;
+  border: 1px solid #555;
+}
+
+/* ── Print / PDF ── */
+@page {
+  size: A4;
+  margin: 16mm 14mm 18mm 14mm;
+}
+
+@media print {
+  .topnav {
+    display: none !important;
+  }
+  body {
+    background: #fff !important;
+    font-size: 10.5pt;
+    color: #1a1a1a;
+  }
+  .wrap {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+  }
+  .hero {
+    min-height: auto !important;
+    height: 100vh;
+    page-break-after: always;
+    break-after: page;
+  }
+  .hero-bg {
+    opacity: 0.45 !important;
+  }
+  section {
+    padding: 1.2rem 0 !important;
+    break-inside: avoid;
+    border-bottom-color: #ddd !important;
+  }
+  h2 {
+    font-size: 1.45rem !important;
+  }
+  .gal-card {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    padding: 1rem 0 !important;
+  }
+  .gal-device {
+    box-shadow: none !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+  .gal-screen,
+  .scard,
+  .ab,
+  .pts-table th {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+  .footer {
+    break-before: page;
+  }
+  a {
+    color: inherit !important;
+    text-decoration: none !important;
+  }
+  .mini-toc {
+    display: none !important;
+  }
+}
