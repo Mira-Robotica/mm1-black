@@ -1,21 +1,39 @@
 (() => {
   const count = 10;
+  const english = document.documentElement.lang.startsWith("en");
+  const assetRoot = new URL(
+    english ? "../assets/rotation/" : "assets/rotation/",
+    location.href,
+  );
   const sources = Array.from(
     { length: count },
-    (_, i) => `assets/rotation/trena-${String(i + 1).padStart(2, "0")}.webp?v=3`,
+    (_, i) => new URL(`trena-${String(i + 1).padStart(2, "0")}.webp?v=5`, assetRoot).href,
   );
-  const names = [
-    "frontal",
-    "frontal direita",
-    "lateral direita",
-    "traseira direita",
-    "traseira direita",
-    "traseira",
-    "traseira esquerda",
-    "lateral esquerda",
-    "frontal esquerda",
-    "frontal esquerda",
-  ];
+  const names = english
+    ? [
+        "front",
+        "front right",
+        "right side",
+        "rear right",
+        "rear right",
+        "rear",
+        "rear left",
+        "left side",
+        "front left",
+        "front left",
+      ]
+    : [
+        "frontal",
+        "frontal direita",
+        "lateral direita",
+        "traseira direita",
+        "traseira direita",
+        "traseira",
+        "traseira esquerda",
+        "lateral esquerda",
+        "frontal esquerda",
+        "frontal esquerda",
+      ];
 
   const section = document.getElementById("explore");
   const product = document.getElementById("rotation-product");
@@ -32,7 +50,9 @@
     if (!frames[requested] || shown === requested) return;
     shown = requested;
     product.src = frames[requested].src;
-    product.alt = `MM1-BLACK, vista ${names[requested]}`;
+    product.alt = english
+      ? `MM1-BLACK, ${names[requested]} view`
+      : `MM1-BLACK, vista ${names[requested]}`;
   }
 
   function select(index) {

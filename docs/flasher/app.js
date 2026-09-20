@@ -1,11 +1,13 @@
 /**
  * MM1-BLACK — installer (Wi-Fi /update or USB UART + esptool-js). MIRA.
- * Release metadata from GitHub API; .bin served from ./bins/ (same origin).
+ * Release metadata from GitHub API; .bin served from ../bins/ (same origin).
  */
 
 const REPO = "verlab/mm1-black";
 const DEFAULT_FLASH_BAUD = 115200;
 const CONNECT_TIMEOUT_MS = 22000;
+const ENGLISH = document.documentElement.lang.startsWith("en");
+const PAGES_ROOT = new URL("../", import.meta.url);
 
 const BOARDS = {
   denky32: {
@@ -262,7 +264,7 @@ function canInstall() {
 }
 
 function localBinUrl(fileName) {
-  return new URL(`bins/${fileName}`, window.location.href).href;
+  return new URL(`bins/${fileName}`, PAGES_ROOT).href;
 }
 
 function applyBoardChrome() {
@@ -283,8 +285,12 @@ function applyModeChrome() {
   $("wifiPanel").classList.toggle("hidden", !wifi);
   $("usbPanel").classList.toggle("hidden", wifi);
   $("ackLabel").textContent = wifi
-    ? "Do not power off during flash."
-    : "Do not unplug USB during flash.";
+    ? ENGLISH
+      ? "Do not power off during installation."
+      : "Não desligue o equipamento durante a instalação."
+    : ENGLISH
+      ? "Do not unplug the USB cable during installation."
+      : "Não desconecte o cabo USB durante a instalação.";
   try {
     localStorage.setItem("mm1-mode", installMode);
   } catch (_) {}
@@ -346,7 +352,8 @@ async function fetchReleasesFromApi() {
 }
 
 async function fetchReleasesFromManifest() {
-  const res = await fetch(new URL("latest.json", window.location.href).href, {
+  const manifestUrl = new URL("latest.json", PAGES_ROOT);
+  const res = await fetch(manifestUrl.href, {
     cache: "no-store",
   });
   if (!res.ok) return [];
@@ -359,7 +366,7 @@ async function fetchReleasesFromManifest() {
       tag: rec.tag,
       name: rec.tag,
       fileName,
-      url: new URL(rec.file, window.location.href).href,
+      url: new URL(rec.file, manifestUrl).href,
       size: rec.size || 0,
     },
   ];

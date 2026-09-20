@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MM1-BLACK — 2D Survey Tool | MIRA</title>
+  <meta name="description" content="MM1-BLACK survey tool by MIRA. 50 m range, 2 mm accuracy, azimuth and inclination, 4.3-inch touchscreen, TopoDroid and SexyTopo." />
+  <link rel="alternate" hreflang="pt-BR" href="../" />
+  <link rel="alternate" hreflang="en" href="./" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../styles.css" />
+  <script>
+    const startup = new URLSearchParams(location.search);
+    if (startup.has("board") || startup.has("mode")) {
+      location.replace(`../firmware/en/${location.search}${location.hash}`);
+    }
+  </script>
+</head>
+<body>
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <a class="brand" href="#top" aria-label="MIRA">
+        <img src="../assets/MIRA_Horizontal_R.svg" alt="MIRA" />
+      </a>
+      <nav>
+        <a href="#product">Product</a>
+        <a href="#capabilities">Capabilities</a>
+        <a href="#interface">Interface</a>
+        <a href="#workflow">Workflow</a>
+        <a href="../firmware/en/">Firmware</a>
+        <a href="../manual/MM1-BLACK_Manual_Usuario.pdf">Manual PDF</a>
+      </nav>
+      <a class="language-switch" href="../" lang="pt-BR" hreflang="pt-BR" aria-label="Ver o site em português"><span aria-hidden="true">🇧🇷</span> PT</a>
+      <a class="btn btn-ghost" href="mailto:contato@mirarobotica.com">Contact</a>
+    </div>
+  </header>
+
+  <section class="hero" id="top">
+    <div class="hero-photo" role="img" aria-label="MM1-BLACK"></div>
+    <div class="wrap hero-copy">
+      <p class="kicker">2D survey tool · MIRA</p>
+      <h1>MM1-BLACK</h1>
+      <p class="lede">Distance and orientation measurements in one portable survey tool, with real-time survey visualization.</p>
+      <div class="hero-actions">
+        <a class="btn btn-red" href="#product">Discover MM1-BLACK</a>
+        <a class="btn btn-line" href="../manual/MM1-BLACK_Manual_Usuario.pdf">Manual PDF</a>
+      </div>
+      <dl class="hero-stats">
+        <div><dt>Range</dt><dd>up to 50 m</dd></div>
+        <div><dt>Orientation</dt><dd>azimuth · inclination</dd></div>
+        <div><dt>Battery life</dt><dd>up to 10 h</dd></div>
+      </dl>
+    </div>
+  </section>
+
+  <section class="strip">
+    <div class="wrap strip-grid">
+      <p>Distance, azimuth and inclination</p>
+      <p>Real-time visualization</p>
+      <p>4.3-inch touchscreen</p>
+      <p>TopoDroid and SexyTopo</p>
+    </div>
+  </section>
+
+  <section class="rotation" id="explore" aria-labelledby="rotation-title">
+    <div class="rotation-shell">
+      <div class="rotation-story">
+        <article class="rotation-panel" id="product">
+          <p class="kicker">The product</p>
+          <h2 id="rotation-title">From the first point to the final file</h2>
+          <p class="lede">MM1-BLACK combines laser measurement, spatial orientation and data organization in one portable survey tool.</p>
+          <p>Designed for cave and mine surveys, it brings capture, visualization and review together on the device.</p>
+          <p class="rotation-hint">Discover more</p>
+        </article>
+
+        <article class="rotation-panel" id="capabilities">
+          <p class="kicker">Measurement</p>
+          <h2>Accuracy for distance and orientation</h2>
+          <p>The system measures distances up to 50 metres with 2 millimetre accuracy. Azimuth and inclination are obtained from high-precision sensors with automatic calibration and magnetic-noise processing.</p>
+          <p>Continuous quality assessment supports reliable captures in environments affected by ferromagnetic interference. Readings compromised by movement or excessive interference may be rejected to protect the survey.</p>
+          <dl class="rotation-facts">
+            <div><dt>Range</dt><dd>up to 50 m</dd></div>
+            <div><dt>Accuracy</dt><dd>2 mm</dd></div>
+            <div><dt>Orientation</dt><dd>azimuth + inclination</dd></div>
+          </dl>
+        </article>
+
+        <article class="rotation-panel">
+          <p class="kicker">Interface</p>
+          <h2>Survey information at the time of capture</h2>
+          <p>The 4.3-inch touchscreen displays points in plan and profile views. The layout is updated during fieldwork and can also be reviewed when an existing file is opened.</p>
+          <p>2-tap, 1-tap and continuous modes adapt the capture control to the survey workflow.</p>
+        </article>
+
+        <article class="rotation-panel">
+          <p class="kicker">Organization</p>
+          <h2>Review before moving forward</h2>
+          <p>Create files, inspect each reading and select points for editing or deletion. The operator remains in control of the data before saving.</p>
+          <p>Up to 10 hours of battery life supports extended work sessions, with USB-C charging.</p>
+        </article>
+
+        <article class="rotation-panel">
+          <p class="kicker">Connectivity</p>
+          <h2>Compatible with your workflow</h2>
+          <p>MM1-BLACK is compatible with TopoDroid and SexyTopo. Send points over Bluetooth, continue the survey in the application and keep data organized from fieldwork to processing.</p>
+          <p>Firmware updates can be checked and installed over the internet.</p>
+          <a class="text-link" href="../firmware/en/">Open firmware updates →</a>
+        </article>
+      </div>
+
+      <div class="rotation-sticky">
+        <div class="rotation-visual">
+          <img id="rotation-product" src="../assets/rotation/trena-01.webp?v=5" width="1024" height="1536" alt="MM1-BLACK, front view" />
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="interface-showcase" id="interface">
+    <div class="wrap">
+      <div class="showcase-intro">
+        <div>
+          <p class="kicker">On-device interface</p>
+          <h2>See the survey as you capture</h2>
+        </div>
+        <p>The 4.3-inch touchscreen presents data on the survey tool itself. Follow the geometry, inspect each reading and verify the sensors without interrupting fieldwork.</p>
+      </div>
+
+      <div class="interface-pair">
+        <article class="interface-card">
+          <div>
+            <p class="kicker">POINTS · capture table</p>
+            <h3>Data ready for review</h3>
+            <p>Inspect distance, azimuth and inclination, review readings and use SAVE or TX when the dataset is ready.</p>
+          </div>
+          <figure><img src="../assets/interface/mm1-points.webp?v=1" alt="MM1-BLACK displaying the capture table" /></figure>
+        </article>
+        <article class="interface-card">
+          <div>
+            <p class="kicker">VIEW · plan and profile</p>
+            <h3>Real-time visualization</h3>
+            <p>Follow stations, legs and points during capture. When a file is opened, the same screen restores the survey layout.</p>
+          </div>
+          <figure><img src="../assets/interface/mm1-view.webp?v=1" alt="MM1-BLACK displaying the survey in plan and profile views" /></figure>
+        </article>
+      </div>
+
+      <div class="compatibility">
+        <div>
+          <p class="kicker">Integration</p>
+          <h2>Ready for TopoDroid and SexyTopo</h2>
+          <p>Send captures over Bluetooth and continue working in the tools already used for underground surveys.</p>
+          <div class="compatibility-badges" aria-label="Compatible applications">
+            <span>TopoDroid</span>
+            <span>SexyTopo</span>
+            <span>Bluetooth</span>
+          </div>
+        </div>
+        <figure class="compatibility-visual">
+          <img src="../assets/interface/mm1-topodroid.webp?v=1" alt="Bluetooth transfer from MM1-BLACK to TopoDroid" />
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section id="workflow">
+    <div class="wrap">
+      <p class="kicker">In the field</p>
+      <h2>A continuous capture workflow</h2>
+      <div class="cards">
+        <article>
+          <span>01</span>
+          <h3>Prepare</h3>
+          <p>Check the sensors, create or open a file and select the capture mode for the task.</p>
+        </article>
+        <article>
+          <span>02</span>
+          <h3>Capture</h3>
+          <p>Aim at the target and use the physical button. The screen and sound signal immediately indicate whether the reading was accepted.</p>
+        </article>
+        <article>
+          <span>03</span>
+          <h3>Review and share</h3>
+          <p>Follow the layout in VIEW, review the points, select SAVE and use TX to send the data to a mobile device.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta">
+    <div class="wrap cta-inner">
+      <div>
+        <p class="kicker">Documentation</p>
+        <h2>User manual</h2>
+        <p>Use the PDF document to prepare, operate and configure MM1-BLACK.</p>
+      </div>
+      <div class="cta-actions">
+        <a class="btn btn-red" href="../manual/MM1-BLACK_Manual_Usuario.pdf">Download manual PDF</a>
+        <a class="btn btn-line" href="../firmware/en/">Update firmware</a>
+      </div>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <div class="wrap foot-inner">
+      <img src="../assets/MIRA_Principal_R.svg" alt="MIRA" />
+      <div>
+        <strong>MIRA — Mapeamento e Robótica Ltda.</strong>
+        <p>Belo Horizonte, Brazil · <a href="mailto:contato@mirarobotica.com">contato@mirarobotica.com</a> · <a href="https://www.mirarobotica.com/" target="_blank" rel="noopener">mirarobotica.com</a></p>
+        <small>MM1-BLACK · product website · 2026</small>
+      </div>
+    </div>
+  </footer>
+  <script src="../rotation.js?v=4"></script>
+</body>
+</html>

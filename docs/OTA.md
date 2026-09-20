@@ -4,14 +4,14 @@
 
 Shows **FW_VERSION** and a QR code to:
 
-**https://verlab.github.io/mm1-black/**
+**https://verlab.github.io/mm1-black/firmware/**
 
 P4 QR opens `?board=p4`. Wi-Fi defaults **Off**. Join an access point
 to check GitHub Pages for a newer release and install it on the device.
 
 ## Installer (PC)
 
-1. Open the **[firmware installer](https://verlab.github.io/mm1-black/)**
+1. Open the **[firmware installer](https://verlab.github.io/mm1-black/firmware/)**
    (**Chrome** or **Edge**).
 2. **Wi-Fi** (preferred): Join an AP on the tape, or tap **AP**. Enter the
    address from SETUP → WiFi (or `192.168.4.1` on the MM1 access point),

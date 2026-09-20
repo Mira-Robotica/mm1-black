@@ -5,10 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>MM1-BLACK — Trena 2D | MIRA</title>
   <meta name="description" content="MM1-BLACK, trena 2D da MIRA. Alcance 50 m · 2 mm. Azimute e inclinação. Tela touch 4,3″. TopoDroid e SexyTopo." />
+  <link rel="alternate" hreflang="pt-BR" href="./" />
+  <link rel="alternate" hreflang="en" href="en/" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
+  <script>
+    const startup = new URLSearchParams(location.search);
+    if (startup.has("board") || startup.has("mode")) {
+      location.replace(`firmware/${location.search}${location.hash}`);
+    }
+  </script>
 </head>
 <body>
   <header class="nav">
@@ -19,9 +27,12 @@
       <nav>
         <a href="#produto">Produto</a>
         <a href="#capacidades">Capacidades</a>
+        <a href="#interface">Interface</a>
         <a href="#uso">Uso</a>
-        <a href="../manual/MM1-BLACK_Manual_Usuario.pdf">Manual PDF</a>
+        <a href="firmware/">Firmware</a>
+        <a href="manual/MM1-BLACK_Manual_Usuario.pdf">Manual PDF</a>
       </nav>
+      <a class="language-switch" href="en/" lang="en" hreflang="en" aria-label="View site in English"><span aria-hidden="true">🇬🇧</span> EN</a>
       <a class="btn btn-ghost" href="mailto:contato@mirarobotica.com">Contato</a>
     </div>
   </header>
@@ -34,7 +45,7 @@
       <p class="lede">Medições de distância e orientação reunidas em um equipamento portátil, com visualização do levantamento em tempo real.</p>
       <div class="hero-actions">
         <a class="btn btn-red" href="#produto">Conheça a MM1-BLACK</a>
-        <a class="btn btn-line" href="../manual/MM1-BLACK_Manual_Usuario.pdf">Manual PDF</a>
+        <a class="btn btn-line" href="manual/MM1-BLACK_Manual_Usuario.pdf">Manual PDF</a>
       </div>
       <dl class="hero-stats">
         <div><dt>Alcance</dt><dd>até 50 m</dd></div>
@@ -60,14 +71,15 @@
           <p class="kicker">O produto</p>
           <h2 id="rotation-title">Do primeiro ponto ao arquivo final</h2>
           <p class="lede">A MM1-BLACK integra medição a laser, orientação espacial e organização dos dados em um equipamento portátil.</p>
-          <p>Role a página para explorar o equipamento. A trena permanece ao lado e completa uma volta conforme as capacidades são apresentadas.</p>
-          <p class="rotation-hint">Role para girar</p>
+          <p>Desenvolvida para acompanhar levantamentos em cavernas e minas, reúne captura, visualização e revisão no próprio equipamento.</p>
+          <p class="rotation-hint">Veja mais</p>
         </article>
 
         <article class="rotation-panel" id="capacidades">
           <p class="kicker">Medição</p>
-          <h2>Alcance e orientação em cada captura</h2>
-          <p>O sistema mede distâncias de até 50 metros com precisão de 2 milímetros e registra azimute e inclinação com autocalibração e tratamento de ruído magnético.</p>
+          <h2>Precisão para distância e orientação</h2>
+          <p>O sistema mede distâncias de até 50 metros com precisão de 2 milímetros. Azimute e inclinação são obtidos por sensores de alta precisão, com autocalibração e tratamento de ruído magnético.</p>
+          <p>A avaliação contínua da qualidade ajuda a manter capturas confiáveis em ambientes com interferência ferromagnética. Leituras comprometidas por movimento ou interferência elevada podem ser descartadas para proteger o levantamento.</p>
           <dl class="rotation-facts">
             <div><dt>Alcance</dt><dd>até 50 m</dd></div>
             <div><dt>Precisão</dt><dd>2 mm</dd></div>
@@ -91,16 +103,64 @@
 
         <article class="rotation-panel">
           <p class="kicker">Conectividade</p>
-          <h2>Do equipamento ao aplicativo</h2>
-          <p>Envie as capturas por Bluetooth para o TopoDroid ou o SexyTopo. As atualizações de firmware podem ser instaladas pela internet diretamente na MM1-BLACK.</p>
-          <a class="text-link" href="../manual/MM1-BLACK_Manual_Usuario.pdf">Baixar o manual em PDF →</a>
+          <h2>Compatível com seu fluxo de trabalho</h2>
+          <p>A MM1-BLACK é compatível com TopoDroid e SexyTopo. Envie pontos por Bluetooth, continue o levantamento no aplicativo e mantenha os dados organizados do campo ao processamento.</p>
+          <p>As atualizações de firmware podem ser verificadas e instaladas pela internet.</p>
+          <a class="text-link" href="firmware/">Acessar atualizações de firmware →</a>
         </article>
       </div>
 
       <div class="rotation-sticky">
         <div class="rotation-visual">
-          <img id="rotation-product" src="assets/rotation/trena-01.webp?v=3" width="1024" height="1536" alt="MM1-BLACK, vista frontal" />
+          <img id="rotation-product" src="assets/rotation/trena-01.webp?v=5" width="1024" height="1536" alt="MM1-BLACK, vista frontal" />
         </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="interface-showcase" id="interface">
+    <div class="wrap">
+      <div class="showcase-intro">
+        <div>
+          <p class="kicker">Interface no equipamento</p>
+          <h2>Veja o levantamento enquanto captura</h2>
+        </div>
+        <p>A tela touch de 4,3″ apresenta os dados no próprio equipamento. Acompanhe a geometria, confira cada leitura e verifique os sensores sem interromper o trabalho.</p>
+      </div>
+
+      <div class="interface-pair">
+        <article class="interface-card">
+          <div>
+            <p class="kicker">POINTS · tabela de capturas</p>
+            <h3>Dados prontos para revisão</h3>
+            <p>Consulte distância, azimute e inclinação, revise as leituras e utilize SAVE ou TX quando o conjunto estiver pronto.</p>
+          </div>
+          <figure><img src="assets/interface/mm1-points.webp?v=1" alt="MM1-BLACK exibindo a tabela de capturas" /></figure>
+        </article>
+        <article class="interface-card">
+          <div>
+            <p class="kicker">VIEW · planta e perfil</p>
+            <h3>Visualização em tempo real</h3>
+            <p>Acompanhe estações, caminhos e pontos durante a captura. Ao abrir um arquivo, a mesma tela recupera o layout do levantamento.</p>
+          </div>
+          <figure><img src="assets/interface/mm1-view.webp?v=1" alt="MM1-BLACK exibindo o levantamento em planta e perfil" /></figure>
+        </article>
+      </div>
+
+      <div class="compatibility">
+        <div>
+          <p class="kicker">Integração</p>
+          <h2>Pronta para TopoDroid e SexyTopo</h2>
+          <p>Transmita as capturas por Bluetooth e continue o trabalho nas ferramentas já utilizadas em levantamentos subterrâneos.</p>
+          <div class="compatibility-badges" aria-label="Aplicativos compatíveis">
+            <span>TopoDroid</span>
+            <span>SexyTopo</span>
+            <span>Bluetooth</span>
+          </div>
+        </div>
+        <figure class="compatibility-visual">
+          <img src="assets/interface/mm1-topodroid.webp?v=1" alt="Transferência Bluetooth da MM1-BLACK para o TopoDroid" />
+        </figure>
       </div>
     </div>
   </section>
@@ -137,7 +197,8 @@
         <p>Consulte o documento em PDF para preparar, operar e configurar a MM1-BLACK.</p>
       </div>
       <div class="cta-actions">
-        <a class="btn btn-red" href="../manual/MM1-BLACK_Manual_Usuario.pdf">Baixar manual PDF</a>
+        <a class="btn btn-red" href="manual/MM1-BLACK_Manual_Usuario.pdf">Baixar manual PDF</a>
+        <a class="btn btn-line" href="firmware/">Atualizar firmware</a>
       </div>
     </div>
   </section>
@@ -152,6 +213,6 @@
       </div>
     </div>
   </footer>
-  <script src="rotation.js"></script>
+  <script src="rotation.js?v=4"></script>
 </body>
 </html>

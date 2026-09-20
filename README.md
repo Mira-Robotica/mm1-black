@@ -4,10 +4,10 @@ Handheld 1D cave survey tool: **laser distance**, **BNO08x IMU** (azimuth, incli
 
 [![CI](https://github.com/verlab/mm1-black/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/verlab/mm1-black/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/badge/dynamic/json?label=release&query=%24.tag_name&url=https%3A%2F%2Fapi.github.com%2Frepos%2Fverlab%2Fmm1-black%2Freleases%2Flatest&color=orange&logo=github)](https://github.com/verlab/mm1-black/releases/latest)
-[![Firmware installer](https://img.shields.io/badge/firmware-install%20page-blue)](https://verlab.github.io/mm1-black/)
+[![Firmware installer](https://img.shields.io/badge/firmware-install%20page-blue)](https://verlab.github.io/mm1-black/firmware/)
 ![PlatformIO](https://img.shields.io/badge/PlatformIO-ESP32-blue)
 
-**Firmware update:** [verlab.github.io/mm1-black](https://verlab.github.io/mm1-black/) — Wi-Fi or USB UART; also via QR on the device (**SETUP → About**).
+**Firmware update:** [verlab.github.io/mm1-black/firmware](https://verlab.github.io/mm1-black/firmware/) — Wi-Fi or USB UART; also via QR on the device (**SETUP → About**).
 
 ## Features
 
@@ -77,7 +77,7 @@ pio device monitor -b 115200
 ### Releases & web installer
 
 - Tag `v*` → GitHub Release with `MM1-BLACK-denky32-vX.Y.Z.bin`
-- **[Web installer](https://verlab.github.io/mm1-black/)** — Chrome/Edge, Wi-Fi or USB UART ([docs/OTA.md](docs/OTA.md), [docs/flasher/DEPLOY.md](docs/flasher/DEPLOY.md))
+- **[Web installer](https://verlab.github.io/mm1-black/firmware/)** — Chrome/Edge, Wi-Fi or USB UART ([docs/OTA.md](docs/OTA.md), [docs/flasher/DEPLOY.md](docs/flasher/DEPLOY.md))
 - CI artifacts: firmware per commit on Actions
 
 ## Project layout

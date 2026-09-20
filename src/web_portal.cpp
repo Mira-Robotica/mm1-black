@@ -161,7 +161,7 @@ tr:hover td{background:rgba(91,192,255,.06)}
         <a class="btn" href="/api/files">Files JSON</a>
         <a class="btn" href="/api/status">Status JSON</a>
         <a class="btn" href="/api/points">Points JSON</a>
-        <a class="btn primary" href="https://verlab.github.io/mm1-black/">Install firmware</a>
+        <a class="btn primary" href="https://verlab.github.io/mm1-black/firmware/">Install firmware</a>
         <a class="btn" href="/update">Upload firmware.bin</a>
       </div>
       <div class="spark" style="margin-top:12px">CSV endpoints are read-only. Prefer the installer or SETUP → WiFi → Install.</div>
@@ -362,7 +362,7 @@ input,button{font:inherit} button{background:#1f3a66;color:#cfe6ff;border:1px so
 </style></head><body>
 <div class="card">
 <h2>Firmware upload</h2>
-<p>Preferred: open <a href="https://verlab.github.io/mm1-black/">verlab.github.io/mm1-black</a> or use <b>SETUP → WiFi → Join</b> then <b>Install</b> on the device.</p>
+<p>Preferred: open <a href="https://verlab.github.io/mm1-black/firmware/">verlab.github.io/mm1-black/firmware</a> or use <b>SETUP → WiFi → Join</b> then <b>Install</b> on the device.</p>
 <p>This form is for a local <code>firmware.bin</code> (not <code>firmware.factory.bin</code>).</p>
 <form method="POST" action="/update" enctype="multipart/form-data">
   <p><input type="file" name="firmware" accept=".bin" required></p>

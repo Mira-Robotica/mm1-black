@@ -1,59 +1,56 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Firmware MM1-BLACK · MIRA</title>
-    <meta
-      name="description"
-      content="Instalação e atualização do firmware da MM1-BLACK por Wi-Fi ou USB."
-    />
+    <title>MM1-BLACK Firmware · MIRA</title>
+    <meta name="description" content="Install and update MM1-BLACK firmware over Wi-Fi or USB." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="../styles.css" />
   </head>
   <body>
     <div class="bg" aria-hidden="true"></div>
     <div class="wrap">
       <header class="top">
-        <a href="../" aria-label="MM1-BLACK">
-          <img src="../assets/MIRA_Horizontal_R.svg" alt="MIRA" />
+        <a href="../../en/" aria-label="MM1-BLACK">
+          <img src="../../assets/MIRA_Horizontal_R.svg" alt="MIRA" />
         </a>
         <nav>
-          <a href="../">Produto</a>
-          <a href="../manual/MM1-BLACK_Manual_Usuario.pdf">Manual PDF</a>
+          <a href="../../en/">Product</a>
+          <a href="../../manual/MM1-BLACK_Manual_Usuario.pdf">Manual PDF</a>
           <a class="external-link" href="https://github.com/verlab/mm1-black/releases">Releases</a>
-          <a class="language-choice" href="en/" lang="en" hreflang="en" aria-label="View installer in English"><span aria-hidden="true">🇬🇧</span> EN</a>
+          <a class="language-choice" href="../" lang="pt-BR" hreflang="pt-BR" aria-label="Ver o instalador em português"><span aria-hidden="true">🇧🇷</span> PT</a>
         </nav>
       </header>
 
       <section class="hero">
         <p class="kicker">MM1-BLACK · Firmware</p>
-        <h1>Atualize seu equipamento</h1>
+        <h1>Update your instrument</h1>
         <p class="lede">
-          Instale a versão mais recente por <strong>Wi-Fi</strong> ou utilize
-          a conexão <strong>USB UART</strong>. Para instalação por USB, use
-          Chrome ou Edge em um computador.
+          Install the latest release over <strong>Wi-Fi</strong> or use a
+          <strong>USB UART</strong> connection. USB installation requires
+          Chrome or Edge on a computer.
         </p>
       </section>
 
       <noscript>
-        <p class="banner err">Ative o JavaScript para utilizar o instalador.</p>
+        <p class="banner err">Enable JavaScript to use the installer.</p>
       </noscript>
 
       <div id="noSerial" class="banner err hidden" role="alert">
-        A instalação por USB requer <strong>Google Chrome</strong> ou
-        <strong>Microsoft Edge</strong> em um computador. A instalação por
-        Wi-Fi continua disponível.
+        USB installation requires <strong>Google Chrome</strong> or
+        <strong>Microsoft Edge</strong> on a computer. Wi-Fi installation
+        remains available.
       </div>
 
       <div class="row">
-        <span class="field-label">Método de instalação</span>
-        <div class="board-toggle" role="group" aria-label="Método de instalação">
+        <span class="field-label">Installation method</span>
+        <div class="board-toggle" role="group" aria-label="Installation method">
           <button type="button" class="board-btn active" id="btnModeWifi" data-mode="wifi">
             Wi-Fi
-            <small>Rede local</small>
+            <small>Local network</small>
           </button>
           <button type="button" class="board-btn" id="btnModeUsb" data-mode="usb">
             USB
@@ -63,23 +60,23 @@
       </div>
 
       <ol class="steps" id="stepListWifi">
-        <li><span>01</span> Na MM1-BLACK, abra SETUP → WiFi</li>
-        <li><span>02</span> Conecte o computador à mesma rede</li>
-        <li><span>03</span> Localize o equipamento ou informe o endereço</li>
-        <li><span>04</span> Confirme e instale</li>
+        <li><span>01</span> On MM1-BLACK, open SETUP → WiFi</li>
+        <li><span>02</span> Connect the computer to the same network</li>
+        <li><span>03</span> Find the instrument or enter its address</li>
+        <li><span>04</span> Confirm and install</li>
       </ol>
 
       <ol class="steps hidden" id="stepListUsb">
-        <li><span>01</span> Conecte o adaptador USB UART</li>
-        <li><span>02</span> Feche o monitor serial e a IDE</li>
-        <li><span>03</span> Selecione a placa e a versão</li>
-        <li><span>04</span> Use BOOT → RST quando solicitado</li>
+        <li><span>01</span> Connect the USB UART adapter</li>
+        <li><span>02</span> Close the serial monitor and IDE</li>
+        <li><span>03</span> Select the board and release</li>
+        <li><span>04</span> Use BOOT → RST when requested</li>
       </ol>
 
       <section class="panel">
         <div class="row">
-          <span class="field-label">Modelo da placa</span>
-          <div class="board-toggle" role="group" aria-label="Modelo da placa">
+          <span class="field-label">Board model</span>
+          <div class="board-toggle" role="group" aria-label="Board model">
             <button type="button" class="board-btn active" id="btnBoardCyd" data-board="denky32">
               CYD
               <small>ESP32</small>
@@ -92,29 +89,22 @@
         </div>
 
         <div class="row">
-          <label for="releaseSelect">Versão do firmware</label>
+          <label for="releaseSelect">Firmware release</label>
           <select id="releaseSelect" disabled>
-            <option value="">Carregando versões…</option>
+            <option value="">Loading releases…</option>
           </select>
         </div>
 
         <div id="wifiPanel">
           <div class="row">
-            <label for="otaHost">Endereço do equipamento</label>
+            <label for="otaHost">Instrument address</label>
             <div class="host-row">
-              <input
-                id="otaHost"
-                type="text"
-                spellcheck="false"
-                autocomplete="off"
-                value="192.168.4.1"
-                placeholder="192.168.4.1"
-              />
-              <button type="button" class="ghost-btn" id="btnFind">Localizar</button>
+              <input id="otaHost" type="text" spellcheck="false" autocomplete="off" value="192.168.4.1" placeholder="192.168.4.1" />
+              <button type="button" class="ghost-btn" id="btnFind">Find</button>
             </div>
             <p class="hint" id="wifiHint">
-              No modo AP, use <code>192.168.4.1</code>. Ao ingressar em uma
-              rede, consulte o endereço em SETUP → WiFi.
+              In AP mode, use <code>192.168.4.1</code>. After joining a
+              network, find the address under SETUP → WiFi.
             </p>
             <div id="foundDevices" class="found"></div>
           </div>
@@ -123,7 +113,7 @@
         <div id="usbPanel" class="hidden">
           <div class="row row-split">
             <div>
-              <label for="flashBaud">Velocidade</label>
+              <label for="flashBaud">Speed</label>
               <select id="flashBaud">
                 <option value="115200" selected>115200 baud</option>
                 <option value="230400">230400 baud</option>
@@ -132,11 +122,9 @@
               </select>
             </div>
             <div class="installed">
-              <span class="label">Versão instalada</span>
+              <span class="label">Installed release</span>
               <span id="deviceVersion" class="mono">—</span>
-              <button type="button" class="linkish" id="btnReadVersion" title="Read VERSION from the device">
-                Consultar
-              </button>
+              <button type="button" class="linkish" id="btnReadVersion" title="Read VERSION from the instrument">Read</button>
             </div>
           </div>
         </div>
@@ -146,11 +134,11 @@
 
         <label class="ack">
           <input type="checkbox" id="ackFlash" />
-          <span id="ackLabel">Não desligue o equipamento durante a instalação.</span>
+          <span id="ackLabel">Do not power off during installation.</span>
         </label>
 
         <button type="button" class="install-btn" id="btnInstall" disabled>
-          Instalar firmware
+          Install firmware
         </button>
 
         <div class="progress" id="progressWrap">
@@ -158,18 +146,18 @@
         </div>
 
         <details class="log-details">
-          <summary>Detalhes técnicos</summary>
+          <summary>Technical details</summary>
           <div class="log" id="log" aria-live="polite"></div>
         </details>
       </section>
 
       <footer>
-        <a href="../">MM1-BLACK</a>
+        <a href="../../en/">MM1-BLACK</a>
         <a href="https://github.com/verlab/mm1-black">GitHub</a>
         <span>MIRA — Mapeamento e Robótica</span>
       </footer>
     </div>
     <form id="wifiOtaForm" class="hidden" method="POST" enctype="multipart/form-data" target="mm1ota"></form>
-    <script type="module" src="app.js"></script>
+    <script type="module" src="../app.js"></script>
   </body>
 </html>
