@@ -4,14 +4,14 @@
 
 Shows **FW_VERSION** and a QR code to:
 
-**https://verlab.github.io/mm1-black/firmware/**
+**https://mira-robotica.github.io/mm1-black/firmware/**
 
 P4 QR opens `?board=p4`. Wi-Fi defaults **Off**. Join an access point
 to check GitHub Pages for a newer release and install it on the device.
 
 ## Installer (PC)
 
-1. Open the **[firmware installer](https://verlab.github.io/mm1-black/firmware/)**
+1. Open the **[firmware installer](https://mira-robotica.github.io/mm1-black/firmware/)**
    (**Chrome** or **Edge**).
 2. **Wi-Fi** (preferred): Join an AP on the tape, or tap **AP**. Enter the
    address from SETUP → WiFi (or `192.168.4.1` on the MM1 access point),
@@ -19,7 +19,7 @@ to check GitHub Pages for a newer release and install it on the device.
 3. **USB UART**: connect a USB UART cable, pick the board, then **Install**.
 4. Optional USB **Read** sends `VERSION` → `MM1_FW_VERSION=…`
 
-Images on [GitHub Releases](https://github.com/verlab/mm1-black/releases):
+Images on [GitHub Releases](https://github.com/Mira-Robotica/mm1-black/releases):
 
 - `MM1-BLACK-denky32-vX.Y.Z.bin`
 - `MM1-BLACK-mm1_p4-vX.Y.Z.bin`
@@ -49,7 +49,7 @@ The script scans the LAN (and `192.168.4.1`) for `/api/status` and POSTs
 
 1. SETUP → **WiFi** → enter SSID / password (or **Scan**), then **Join**.
 2. After the device has internet, **Check** reads
-   `https://verlab.github.io/mm1-black/latest.json` (GitHub API fallback).
+   `https://mira-robotica.github.io/mm1-black/latest.json` (GitHub API fallback).
 3. If a newer tag exists, **Install** streams that board’s `.bin` into the
    inactive OTA slot and reboots.
 4. Credentials stay in NVS. Radio stays off at boot until you tap Join.

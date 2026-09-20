@@ -3,7 +3,7 @@
  * Release metadata from GitHub API; .bin served from ../bins/ (same origin).
  */
 
-const REPO = "verlab/mm1-black";
+const REPO = "Mira-Robotica/mm1-black";
 const DEFAULT_FLASH_BAUD = 115200;
 const CONNECT_TIMEOUT_MS = 22000;
 const ENGLISH = document.documentElement.lang.startsWith("en");

@@ -248,7 +248,7 @@ static bool http_plain_get(const IPAddress &ip, uint16_t port, const char *host,
     return ok;
 }
 
-static const char *k_pages_host = "verlab.github.io";
+static const char *k_pages_host = "mira-robotica.github.io";
 
 /* Arduino P4 mbedtls is CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC: ssl_setup
  * wants ~32 KB DRAM and fails with -32512 (ALLOC_FAILED). */

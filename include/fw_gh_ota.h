@@ -4,10 +4,10 @@
 
 /** GitHub Pages manifest + bin (same site as the USB installer). */
 #ifndef FW_GH_MANIFEST_URL
-#define FW_GH_MANIFEST_URL "https://verlab.github.io/mm1-black/latest.json"
+#define FW_GH_MANIFEST_URL "https://mira-robotica.github.io/mm1-black/latest.json"
 #endif
 #ifndef FW_GH_BASE_URL
-#define FW_GH_BASE_URL "https://verlab.github.io/mm1-black/"
+#define FW_GH_BASE_URL "https://mira-robotica.github.io/mm1-black/"
 #endif
 
 #if defined(MM1_BOARD_P4)

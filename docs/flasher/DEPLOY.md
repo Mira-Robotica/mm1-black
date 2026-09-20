@@ -4,10 +4,10 @@ Static page on GitHub Pages; firmware binaries come from **GitHub Releases** (no
 
 ## Setup
 
-1. Repository **public** (`verlab/mm1-black`).
+1. Repository **public** (`Mira-Robotica/mm1-black`).
 2. **Settings → Pages → Source: GitHub Actions**.
-3. Product URL: **https://verlab.github.io/mm1-black/**
-4. Firmware installer: **https://verlab.github.io/mm1-black/firmware/**
+3. Product URL: **https://mira-robotica.github.io/mm1-black/**
+4. Firmware installer: **https://mira-robotica.github.io/mm1-black/firmware/**
 
 ## How downloads work
 
