@@ -10,6 +10,11 @@
 dist/
 docs/flasher/bins/
 
+# Termo de empréstimo e parecer — documentos internos, não versionar
+docs/manual/Termo_Emprestimo_*.docx
+docs/manual/Parecer_Termo_Emprestimo_*.docx
+docs/manual/gerar_termo_emprestimo.py
+
 # Cursor IDE — pasta local (memórias, regras experimentais); não versionar
 .cursor/
 .DS_Store
