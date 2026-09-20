@@ -224,17 +224,28 @@ body {
   gap: 14px;
 }
 
-@media (max-width: 520px) {
+@media (max-width: 720px) {
+  .wrap {
+    padding: 0 16px 48px;
+  }
+
   .top {
-    margin-bottom: 42px;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    margin-bottom: 36px;
+    min-height: 52px;
   }
 
   .top nav {
+    flex: 1 1 100%;
     gap: 12px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .top nav a {
     font-size: 0.78rem;
+    white-space: nowrap;
   }
 
   .top nav .external-link {
