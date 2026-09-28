@@ -38,3 +38,6 @@ sdkconfig.defaults
 sdkconfig.defaults.orig
 dependencies.lock
 managed_components/
+
+# Local lab Wi-Fi credentials
+/include/lab_config.h
