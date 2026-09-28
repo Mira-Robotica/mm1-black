@@ -10,7 +10,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "board/p4/p4_hosted.h"
 #include "line_reader.h"
 
 #if __has_include("lab_config.h")
@@ -212,7 +211,7 @@ void start_attempt()
     // Configure mode once. Never tear down Hosted with WIFI_OFF during retries.
     if (!radio_ready) {
         if (!WiFi.mode(WIFI_STA)) {
-            Serial.println("[WiFi] STA/ESP-Hosted init failed; check the C6 firmware and SDIO link.");
+            Serial.println("[WiFi] STA/ESP-Hosted init failed; check power and the SDIO link.");
             state = State::Waiting;
             state_since = millis();
             return;
@@ -221,12 +220,7 @@ void start_attempt()
         if (!WiFi.setSleep(false)) {
             Serial.println("[WiFi] modem sleep setting was not accepted.");
         }
-        uint32_t major, minor, patch;
-        hostedGetSlaveVersion(&major, &minor, &patch);
-        Serial.printf("[C6] hosted=%u firmware=%lu.%lu.%lu\n",
-                      static_cast<unsigned>(hostedIsInitialized()),
-                      static_cast<unsigned long>(major), static_cast<unsigned long>(minor),
-                      static_cast<unsigned long>(patch));
+        Serial.printf("[C6] hosted=%u\n", static_cast<unsigned>(hostedIsInitialized()));
     }
     WiFi.begin(LAB_WIFI_SSID, LAB_WIFI_PASSWORD[0] ? LAB_WIFI_PASSWORD : nullptr);
     state = State::Connecting;
@@ -246,7 +240,8 @@ void network_begin()
         Serial.println("[LAB] CONFIG_REQUIRED: edit include/lab_config.h, then build/upload again.");
         return;
     }
-    if (!p4_hosted_configure()) {
+    // Waveshare SDIO: CLK, CMD, D0, D1, D2, D3, RESET.
+    if (!hostedSetPins(18, 19, 14, 15, 16, 17, 54)) {
         state = State::Fault;
         Serial.println("[C6] Failed to configure SDIO pins before Wi-Fi initialization.");
         return;
