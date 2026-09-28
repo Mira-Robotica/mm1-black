@@ -78,10 +78,12 @@ Aceita um cliente por vez, linhas de até 128 caracteres, comandos fragmentados 
 - `CONFIG_REQUIRED`: SSID ausente ou comprimento de credencial inválido no arquivo local.
 - Timeout de conexão: confira SSID/senha, faixa de 2,4 GHz e DHCP. O firmware aguarda 10 s e tenta novamente. `disconnect_reason` é o código de motivo do driver, não uma indicação de falha do laser/IMU.
 - IP obtido, mas ping/TCP falham: confira IP atual, rota do PC, isolamento de clientes da rede/AP, VLAN e regras de ICMP/TCP.
-- Falha antes de obter IP, no ESP-Hosted: confira alimentação, comunicação SDIO e compatibilidade do firmware do C6. Os pinos são CLK 18, CMD 19, D0–D3 14–17 e RESET 54; a inicialização não depende de BLE nem do painel.
+- Falha antes de obter IP, no ESP-Hosted: confira alimentação e comunicação SDIO. Usar o firmware de fábrica do C6 fornecido pela Waveshare, com o qual conexão Wi-Fi e ping já foram confirmados nesta placa. Os pinos são CLK 18, CMD 19, D0–D3 14–17 e RESET 54; a inicialização não depende de BLE nem do painel.
 - Ao perder Wi-Fi/IP, o firmware fecha a conexão TCP antiga. Ao recuperar a rede, imprime o IP e reabre o servidor. Pode ser necessário reconectar o cliente a outro IP atribuído pelo DHCP.
 
 O código mantém o rádio em station nas retentativas, sem chamar `WIFI_OFF` ou apagar configurações NVS da aplicação. O timeout de 20 s cobre associação/DHCP após iniciar o driver; a inicialização física do ESP-Hosted possui seus próprios limites e recuperação no SDK. Falhas de transporte do C6 podem provocar recuperação/reinicialização pelo próprio framework e precisam de verificação em bancada.
+
+O próximo incremento prevê empacotar o teste Python de `STATUS` em um contêiner autocontido em `./docker`, conforme o [plano de aquisição](PLANO_AQUISICAO_SENSORES_P4.md#incremento-2-contêiner-docker-e-teste-python-de-status). O Docker ainda não está implementado; o exemplo acima continua disponível para execução direta.
 
 ## Verificação desta implementação
 
@@ -89,4 +91,4 @@ Compilação confirmada com plataforma fixada em **pioarduino 55.03.312**, Ardui
 
 O ELF inclui `icmp_input` e não inclui símbolos da UI/LVGL/Display Panel, BLEDevice/inicialização NimBLE, biblioteca SD ou serviços de OTA da aplicação. O SDK retém rotinas de SDMMC para o transporte **SDIO do C6** e consulta de partição de boot; isso não significa inicialização do cartão SD ou de um serviço de atualização.
 
-A conexão real, a reconexão, o display/áudio desligados e o ping precisam ser confirmados na placa. Não houve gravação nem teste de rede em hardware nesta etapa.
+O usuário confirmou compilação, gravação, conexão Wi-Fi e ping em 28/09/2026. A consulta `STATUS` via Python, a reconexão e os demais critérios de bancada ainda precisam ser verificados.

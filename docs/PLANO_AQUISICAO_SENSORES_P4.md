@@ -1,6 +1,6 @@
 # Plano incremental: validação dos sensores da trena por aquisição Wi-Fi sob demanda
 
-Status: incremento 1 implementado e compilado; validação em hardware pendente. Incrementos 2–5 permanecem planejados. Ver [instruções de Wi-Fi e ping](LAB_WIFI_P4.md). Base de código examinada: commit `684c16a` e arquivos locais. Revisão de escopo em 26/09/2026: aquisição em posições discretas do manipulador, por solicitação do Python, com timestamps no PC. Este plano substitui a proposta de streaming contínuo e sincronização temporal no ESP. O lote executa um número fixo de tentativas, incluindo falhas, e exporta quaternion junto dos ângulos e da qualidade.
+Status: incremento 1 implementado; compilação, gravação, conexão Wi-Fi e ping confirmados pelo usuário em 28/09/2026. Teste de `STATUS` via Python e demais verificações de bancada pendentes. Incrementos 2–6 permanecem planejados; o incremento 2 passa a preparar o cliente em Docker. Ver [instruções de Wi-Fi e ping](LAB_WIFI_P4.md). Base de código examinada: commit `684c16a` e arquivos locais. Revisão de escopo em 26/09/2026: aquisição em posições discretas do manipulador, por solicitação do Python, com timestamps no PC. Este plano substitui a proposta de streaming contínuo e sincronização temporal no ESP. O lote executa um número fixo de tentativas, incluindo falhas, e exporta quaternion junto dos ângulos e da qualidade.
 
 ## 1. Objetivo e sequência do ensaio
 
@@ -29,14 +29,14 @@ SSID, senha, porta, tempos de espera e número de repetições são parâmetros.
 | Hardware antigo | `env:denky32`, ESP32 CYD, versões v0.x | Não é o alvo deste trabalho. |
 | Hardware recente | `env:mm1_p4`, Waveshare ESP32-P4-WIFI6-Touch-LCD-4.3 | Usar a definição `boards/mm1_p4.json`. |
 | CPU/revisão | A definição atual usa `esp32p4_es` e 360 MHz; o documento de portabilidade identifica ECO2 | Preservar esses valores até verificar a revisão física; não mudar para 400 MHz apenas por ser a frequência nominal de outra revisão. |
-| Rádio | ESP32-C6, ESP-Hosted por SDIO | P4 não possui Wi-Fi integrado. O firmware do C6 precisa ser compatível com o host. |
+| Rádio | ESP32-C6, ESP-Hosted por SDIO | P4 não possui Wi-Fi integrado. Usar o firmware de fábrica do C6 fornecido pela Waveshare; conexão Wi-Fi e ping já confirmados nesta placa. |
 | IMU | BNO086 segundo os comentários do driver, família BNO08x/SH-2 | Confirmar identificação do módulo por `sh2_getProdIds()` e registrar no ensaio. |
 | Barramento da IMU | I²C por software, SDA 30/SCL 31, endereço preferencial `0x4B` e alternativa `0x4A` | Preservar o transporte existente inicialmente; INT e RST não estão conectados. |
 | Laser | UART1, RX 21/TX 22, `9600`, `SERIAL_8N1`, RX com buffer de 1024 bytes | Não compartilhar com `Serial`, que fica para diagnóstico USB/UART. |
 
 Referências locais: [PlatformIO](../platformio.ini), [placa](../boards/mm1_p4.json), [pinos](../src/board/p4/mm1_p4_pins.h), [portabilidade P4](ESP32_P4_PORT.md).
 
-Há comentários históricos conflitantes sobre os pinos SDIO. O caminho de `sap6_ble_begin()` usa **`hostedSetPins(18, 19, 14, 15, 16, 17, 54)`**, na ordem CLK, CMD, D0, D1, D2, D3 e RESET. A configuração foi extraída para `p4_hosted_configure()` em `src/board/p4/p4_hosted.cpp`, compartilhada pela aplicação original e pelo teste de rede, antes de iniciar Wi-Fi. Não transportar a checagem de prontidão baseada em MAC BLE para o teste sem Bluetooth; validar diretamente a inicialização Hosted e a conexão station.
+Há comentários históricos conflitantes sobre os pinos SDIO. O caminho de `sap6_ble_begin()` usa **`hostedSetPins(18, 19, 14, 15, 16, 17, 54)`**, na ordem CLK, CMD, D0, D1, D2, D3 e RESET. O teste de rede chama essa mesma função diretamente em `src/lab/network.cpp`, antes de iniciar Wi-Fi, verificando seu retorno. Não transportar a checagem de prontidão baseada em MAC BLE para o teste sem Bluetooth; validar diretamente a inicialização Hosted e a conexão station.
 
 O alvo original `mm1_p4` mantém sua configuração. O novo `mm1_p4_lab` usa pioarduino **55.03.312** fixado, Arduino **3.3.12** e IDF **5.5.5**, confirmados na compilação do incremento 1. A variante `esp32p4_es` e a CPU a 360 MHz foram preservadas.
 
@@ -149,13 +149,14 @@ O robô deve permanecer parado **durante todo o lote**, inclusive intervalos e t
 | Arquivo futuro | Responsabilidade |
 | --- | --- |
 | `src/lab/main.cpp` | `setup()` e `loop()` de laboratório; fonte original `src/main.cpp` preservada e excluída do alvo lab. |
-| `src/lab/network.*` e `src/board/p4/p4_hosted.*` | Incremento 1: Wi-Fi station, pinos SDIO, reconexão e diagnóstico serial/TCP. |
+| `src/lab/network.*` | Incremento 1: Wi-Fi station, configuração direta dos pinos SDIO, reconexão e diagnóstico serial/TCP. |
 | `src/lab/laser_poll.*` | Parser e máquina de estados para uma transação do laser sob demanda. |
 | `src/board/p4/p4_imu.*` e `bno08x/*` | Transporte existente, Rotation Vector, novidade, qualidade e reset. |
 | `src/lab/orientation.*` | Conversão para os ângulos atuais, independente de UI. |
 | `src/lab/capture_service.*` | TCP, pedido ativo, contador de repetições, buffer limitado e respostas. |
 | `include/lab_config.example.h` e configuração local ignorada pelo Git | Wi-Fi, porta, limites e convenções angulares. |
-| `tools/capture_sensors.py` | Cliente reutilizável pelo script do manipulador, gravação e análise no PC. |
+| `docker/` | Incremento 2: ambiente Python autocontido, configuração, dependências e teste TCP de `STATUS`. |
+| `docker/scripts/capture_sensors.py` | Evolução posterior: cliente reutilizável pelo script do manipulador, gravação e análise no PC. |
 
 Inicialização: Serial/GPIOs mínimos → ESP-Hosted → Wi-Fi station → sensores → servidor TCP. O servidor aceita `CAPTURE` também com um ou ambos os sensores indisponíveis, desde que o serviço consiga atender o pedido e seus prazos. A indisponibilidade é registrada por tentativa; assim é possível caracterizar um lote com todas as leituras inválidas. Não há dependência de internet, servidor de horário ou data válida no ESP. Não chamar `p4_board_init()`, que carrega display/touch e SD; manter o backlight desabilitado.
 
@@ -276,33 +277,63 @@ Tratar inclinação e singularidades conforme a geometria da seção 2; médias 
 
 ## 7. Incrementos e critérios de aceite
 
-O incremento 1 foi implementado e compilado; seus ensaios em hardware ainda são pendentes. As etapas 2–5 continuam como plano de implementação.
+O incremento 1 já permitiu gravação, conexão e ping na placa, conforme relato do usuário. Falta verificar `STATUS` via Python e os demais critérios de bancada. As etapas 2–6 continuam como plano de implementação. A segunda etapa prepara primeiro o ambiente de aquisição no PC; a aquisição dos sensores passa para a terceira.
 
 ### Incremento 1: aplicação mínima e rede
 
-**Implementado:** ambiente padrão `mm1_p4_lab`, entrada isolada, pinos Hosted compartilhados, Wi-Fi station/DHCP, reconexão e TCP/serial `STATUS`. `CAPTURE` informa `NOT_IMPLEMENTED`; não há sensores inicializados nesta etapa. Configuração e teste: [LAB_WIFI_P4.md](LAB_WIFI_P4.md).
+**Implementado:** ambiente padrão `mm1_p4_lab`, entrada isolada, configuração direta dos pinos Hosted, Wi-Fi station/DHCP, reconexão e TCP/serial `STATUS`. `CAPTURE` informa `NOT_IMPLEMENTED`; não há sensores inicializados nesta etapa. Configuração e teste: [LAB_WIFI_P4.md](LAB_WIFI_P4.md).
 
 **Aceite:** `pio run -e mm1_p4_lab` compila; boot identifica versões/placa; conecta ao laboratório e oferece diagnóstico sem internet ou horário sincronizado. Display/áudio ficam desligados e o ELF não inclui UI, pilha BLE da aplicação, biblioteca SD, portal ou serviço OTA. Rotinas internas de SDMMC necessárias ao SDIO do C6 e consulta da partição de boot podem permanecer no SDK. Não compilar os dois platforms na mesma invocação, conforme limitação documentada do projeto.
 
-### Incremento 2: aquisição unitária
+### Incremento 2: contêiner Docker e teste Python de STATUS
+
+Criar um ambiente de execução Python com todos os arquivos necessários sob **`./docker`**, relativo à raiz deste repositório. Esta seção é somente o plano: não criar o contêiner nesta revisão. O primeiro uso será executar o teste de `STATUS` de [LAB_WIFI_P4.md](LAB_WIFI_P4.md), sem depender de uma instalação de Python no host nem da implementação de `CAPTURE`.
+
+Estrutura prevista:
+
+```text
+docker/
+  Dockerfile
+  compose.yaml
+  .dockerignore
+  .gitignore
+  .env.example
+  requirements.txt
+  README.md
+  scripts/
+    status.py
+  data/                 # saídas persistentes dos testes; conteúdo ignorado pelo Git
+```
+
+- Usar `./docker` como contexto de build, sem `COPY` de arquivos externos a esse diretório. Fixar a versão da imagem Python ao implementar e registrar as dependências de execução em `requirements.txt`. O teste inicial usa somente a biblioteca padrão (`socket`, `argparse` e tratamento de erros); não requer instalar pacotes para esses módulos. O arquivo pode inicialmente conter apenas um comentário indicando a ausência de dependências externas. Incluir e fixar novas bibliotecas conforme as etapas seguintes precisarem delas.
+- Disponibilizar um serviço/comando de execução única no Compose. IP da trena, porta (padrão 5000) e timeout (inicialmente 5 s para conexão/leitura) serão argumentos ou variáveis de ambiente, documentados em `.env.example`. A senha Wi-Fi pertence ao firmware e não é necessária ao cliente. O README deve mostrar a partir da raiz como construir e executar, por exemplo `docker compose -f docker/compose.yaml run --rm status --host <IP> --port 5000`.
+- Configurar o serviço com **`network_mode: host`** no Compose desde o primeiro teste, tendo **Docker Engine no Linux** como ambiente de referência. O contêiner compartilha a rede do PC, sem uma bridge ou NAT adicional do Docker no caminho; não declarar `ports` nem uma rede própria para esse serviço. O cliente continua abrindo uma conexão TCP para o IP e a porta da trena. Rotas, firewall e acesso à rede Wi-Fi continuam sendo responsabilidade do host; esse modo não resolve isolamento de clientes no AP. Não requer USB nem `privileged`. Referência: [rede host do Docker](https://docs.docker.com/engine/network/drivers/host/).
+- Manter o modo host na futura integração com o manipulador. Para uma API com apenas conexões TCP de saída, bridge também atenderia, mas descoberta por broadcast/multicast, portas dinâmicas ou conexões iniciadas pelo robô podem exigir configuração adicional nesse modo. Compartilhar a rede do PC simplifica esses caminhos; confirmar os requisitos quando a API for definida. Caso o cliente passe a abrir portas de escuta, elas precisam estar livres no host e acessíveis pelas regras locais de firewall. Docker Desktop não é o ambiente de referência desta etapa; seu modo host exige habilitação e tem limitações diferentes do Engine no Linux.
+- Implementar `status.py` para ler e validar `HELLO` e `META`, enviar `STATUS\n` e aguardar uma linha `# OK STATUS stage=network_only`. Tratar TCP como fluxo: receber linhas completas mesmo quando fragmentadas, limitar tamanho e espera, detectar EOF e mensagens inesperadas. Exibir a resposta completa, incluindo IP, RSSI e estado Hosted. Sair com código zero somente após uma resposta válida; timeout, conexão recusada, desconexão ou erro de protocolo geram diagnóstico e código diferente de zero.
+- Não aguardar CSV nem `DONE` nesta etapa: o firmware atual ainda responde `NOT_IMPLEMENTED` a `CAPTURE`. Registrar, se desejado, o horário do PC e a resposta em `docker/data`, montado como volume para preservar saídas após remover o contêiner. Não adicionar NTP ou timestamps no ESP.
+- Manter esse mesmo ambiente nas próximas etapas, acrescentando captura, gravação e análise antes da integração com o robô. Reservar `docker/external/manipulador/` como localização proposta para o futuro submódulo, preservando o contexto autocontido; não criar nem adicionar um submódulo agora. Quando o outro repositório for escolhido, fixar sua revisão pelo Git, documentar a inicialização dos submódulos e incorporar suas dependências/API. O teste `STATUS` deve continuar funcionando sem esse submódulo.
+
+**Aceite:** em um checkout novo, com Docker Engine e Compose disponíveis no Linux, construir e executar usando somente os arquivos de `./docker` e o IP informado. Confirmar que o serviço usa `network_mode: host`, sem mapeamento de portas. Receber os dois cumprimentos e uma resposta `STATUS` válida da placa; conferir falha com diagnóstico e saída não zero para IP/porta incorretos, timeout e encerramento prematuro. Verificar respostas fragmentadas e malformadas com servidor simulado. Documentar o comando e o resultado real do teste, sem confundir ping com validação do protocolo TCP. Nenhuma aquisição de sensores ou movimentação do manipulador é necessária para concluir esta etapa.
+
+### Incremento 3: aquisição unitária
 
 Extrair laser e conversão angular, habilitar apenas Rotation Vector e implementar uma repetição com validade, qualidade, novidade e prazos.
 
 **Aceite:** a distância vem de uma transação nova e os ângulos de um relatório novo; getters repetidos não contam como novas amostras. Fórmulas coincidem com a aplicação para mesmo quaternion/eixo/offset. Quaternion e ângulos pertencem ao mesmo relatório; o CSV preserva w,x,y,z e precisão suficiente para recomputar os ângulos. Qualidade baixa permanece visível, `accuracy_rad` mantém a parte fracionária. Singularidade angular preserva o quaternion válido e sinaliza `angles_valid=0`. Testar checksum, frame fragmentado, falta de sensor, reset, cache antigo e resposta tardia; não há espera ilimitada.
 
-### Incremento 3: protocolo e lote limitado
+### Incremento 4: protocolo e lote limitado
 
 Implementar `STATUS`, `CAPTURE`, identificação, ACK/dados/DONE, estados, limites de `n` e envio limitado.
 
 **Aceite:** `n=1`, `n=5` e `n=20` entregam contagens/índices corretos; valores fora de 1–20 são recusados. Injetar falha no primeiro e no meio do lote e falhas em todas as tentativas: em todos esses casos os índices vão até `n`, com erros separados e contagens corretas. Verificar que falha do laser não impede tentar a IMU e vice-versa, sem tentativas extras para obter sucessos. Distinguir `COMPLETE/ERROR` com `n` linhas de `INTERRUPTED`. Testar pedido com sensores indisponíveis, recuperação limitada, `BUSY`, ID repetido, linha longa, TCP fragmentado, prazo global, cliente lento e reconexão. Pedido aceito termina uma vez se a conexão permitir; desconexão desliga laser e impede contaminação do próximo pedido por respostas antigas. `STATUS` continua responsivo durante a espera do laser.
 
-### Incremento 4: cliente Python e integração com poses
+### Incremento 5: evolução do cliente Python e integração com poses
 
-Implementar a função de captura, gravação de dados/metadados e sequência mover → confirmar repouso → acomodar → capturar → conferir/salvar. Primeiro testar com uma interface simulada do robô; adaptar depois à API real.
+Evoluir o cliente e o contêiner criados no incremento 2, mantendo scripts, configuração e dependências sob `./docker`. Implementar a função de captura, gravação de dados/metadados em volume persistente e sequência mover → confirmar repouso → acomodar → capturar → conferir/salvar. Primeiro testar com uma interface simulada do robô; adaptar depois à API real do repositório adicionado como submódulo em `docker/external/manipulador/`. Registrar a revisão desse submódulo nos metadados do ensaio e preservar o comando independente de `STATUS`.
 
 **Aceite:** o script não avança na primeira resposta/ACK, espera `DONE` e confere contagens. Usa a pose real, associa os IDs corretamente, grava lotes totalmente inválidos e distingue conclusão, validade e qualidade. Recalcula os ângulos a partir do quaternion e verifica erro de rotação zero para `q` e `-q`, rotação conhecida não nula e singularidade de Euler com quaternion válido. Testar movimento não concluído, perda de estabilidade, falha no lote, interrupção de rede e erro de gravação; não executar reenvio ou avanço de pose silencioso nesses casos.
 
-### Incremento 5: validação no manipulador
+### Incremento 6: validação no manipulador
 
 Executar piloto com poses conhecidas, inicialmente cinco repetições por pose, ajustar acomodação/`n`/prazos e validar alinhamento de referenciais. Repetir orientações após movimento e retorno, observar efeitos magnéticos e ensaiar distâncias/alvos conhecidos.
 
@@ -311,7 +342,7 @@ Executar piloto com poses conhecidas, inicialmente cinco repetições por pose, 
 ## 8. Pontos a confirmar na implementação
 
 - Modelo/protocolo do laser, erros, tempos mínimos, desligamento e garantia de novidade em fallback/recuperação.
-- Revisão da placa/P4, SDK efetivamente resolvido e firmware ESP-Hosted compatível no C6.
+- Registrar a revisão da placa/P4 e o SDK efetivamente resolvido, mantendo o firmware de fábrica Waveshare no C6.
 - Firmware/calibração da IMU, condições magnéticas e comportamento de fila/reset sob polling.
 - API do manipulador, significado de conclusão de movimento, pose real disponível, convenções e transformação de montagem.
 - Tolerâncias de estabilidade, acomodação, quantidade de poses/repetições e limites de erro desejados. Esses são parâmetros do ensaio, não motivos para adicionar UI ou sincronização temporal ao ESP.
@@ -324,4 +355,4 @@ Executar piloto com poses conhecidas, inicialmente cinco repetições por pose, 
 - [Rádio](../src/sap6_ble.cpp): `hostedSetPins` e inicialização Hosted; [inicialização de placa a excluir](../src/board/p4/p4_board.cpp).
 - [Datasheet BNO08x](datasheets/BNO080_085-Datasheet_v1.16.pdf), [calibração](datasheets/BNO08X-Sesnor-Calibration-Procedure.pdf) e [esquema da placa](datasheets/ESP32-P4-WIFI6-Touch-LCD-4.3-schematic.pdf).
 
-Incremento 1 implementado e compilado. Não houve gravação nem verificação de ping em hardware; os próximos incrementos ainda não foram implementados.
+Incremento 1 implementado, com gravação, conexão Wi-Fi e ping confirmados pelo usuário. `STATUS` via Python permanece pendente. Docker, aquisição de sensores e integração com o manipulador ainda não foram implementados.
