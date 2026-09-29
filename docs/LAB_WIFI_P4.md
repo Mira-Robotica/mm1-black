@@ -55,7 +55,16 @@ No Windows, use `ping -n 5 192.168.1.123`. O lwIP responde a ICMP automaticament
 
 Na serial a 115200, envie `STATUS` seguido de Enter, com terminação LF ou CRLF. Isso funciona inclusive sem Wi-Fi e informa conexão, IP, RSSI, estado Hosted, tentativas e motivo numérico da última desconexão.
 
-Pelo PC, conecte-se à porta 5000 com `nc IP 5000` e digite `STATUS`, ou use Python:
+No PC Linux, o cliente Docker do segundo incremento já está disponível. A partir da raiz do repositório:
+
+```sh
+docker compose -f docker/compose.yaml build status
+docker compose -f docker/compose.yaml run --rm status --host 192.168.1.123
+```
+
+Use o IP real mostrado pela placa. O contêiner usa rede host, valida os cumprimentos e a resposta, e encerra com código diferente de zero se houver erro. Porta, timeout, registro opcional em `docker/data` e testes sem hardware estão descritos em [docker/README.md](../docker/README.md).
+
+Alternativamente, conecte-se à porta 5000 com `nc IP 5000` e digite `STATUS`, ou use Python diretamente no PC:
 
 ```python
 import socket
@@ -83,7 +92,7 @@ Aceita um cliente por vez, linhas de até 128 caracteres, comandos fragmentados 
 
 O código mantém o rádio em station nas retentativas, sem chamar `WIFI_OFF` ou apagar configurações NVS da aplicação. O timeout de 20 s cobre associação/DHCP após iniciar o driver; a inicialização física do ESP-Hosted possui seus próprios limites e recuperação no SDK. Falhas de transporte do C6 podem provocar recuperação/reinicialização pelo próprio framework e precisam de verificação em bancada.
 
-O próximo incremento prevê empacotar o teste Python de `STATUS` em um contêiner autocontido em `./docker`, conforme o [plano de aquisição](PLANO_AQUISICAO_SENSORES_P4.md#incremento-2-contêiner-docker-e-teste-python-de-status). O Docker ainda não está implementado; o exemplo acima continua disponível para execução direta.
+O cliente Docker está implementado em `./docker`, conforme o [segundo incremento do plano de aquisição](PLANO_AQUISICAO_SENSORES_P4.md#incremento-2-contêiner-docker-e-teste-python-de-status). O exemplo Python acima continua disponível para execução direta.
 
 ## Verificação desta implementação
 
@@ -91,4 +100,26 @@ Compilação confirmada com plataforma fixada em **pioarduino 55.03.312**, Ardui
 
 O ELF inclui `icmp_input` e não inclui símbolos da UI/LVGL/Display Panel, BLEDevice/inicialização NimBLE, biblioteca SD ou serviços de OTA da aplicação. O SDK retém rotinas de SDMMC para o transporte **SDIO do C6** e consulta de partição de boot; isso não significa inicialização do cartão SD ou de um serviço de atualização.
 
-O usuário confirmou compilação, gravação, conexão Wi-Fi e ping em 28/09/2026. A consulta `STATUS` via Python, a reconexão e os demais critérios de bancada ainda precisam ser verificados.
+O usuário confirmou compilação, gravação, conexão Wi-Fi e ping em 28/09/2026. Também confirmou a consulta `STATUS` pelo cliente Python no Docker contra a placa real, conforme o registro abaixo. A reconexão e os demais critérios de bancada não cobertos por essa consulta continuam pendentes.
+
+O cliente Docker foi construído e validado com 14 testes automatizados e uma consulta entre contêineres em rede host, incluindo gravação no volume persistente. A consulta real relatada pelo usuário complementa esses testes simulados.
+
+### Resultado na placa real
+
+Comando executado pelo usuário, com o destino já configurado no ambiente:
+
+```sh
+docker compose -f docker/compose.yaml run --rm status
+```
+
+Saída recebida:
+
+```text
+# HELLO MM1LAB 2 stage=network_only boot_id=040ed98e5614a10f connection_id=1
+# META capture=unavailable commands=STATUS
+# OK STATUS stage=network_only wifi=CONNECTED ip=192.168.0.10 rssi_dbm=-39 tcp=LISTENING port=5000 hosted=1 sensors=NOT_IMPLEMENTED attempt=1 disconnect_reason=0 uptime_ms=185890
+```
+
+O resultado confirma a troca `HELLO` → `META` → `STATUS` entre o cliente Docker e o servidor embarcado. Na consulta, a placa estava conectada em `192.168.0.10`, com servidor TCP na porta 5000, RSSI de −39 dBm e ESP-Hosted inicializado (`hosted=1`). O firmware informou uma tentativa de conexão, motivo de desconexão igual a zero e 185,890 s desde o boot; esse tempo é de atividade do firmware, não a duração da consulta.
+
+`stage=network_only`, `capture=unavailable` e `sensors=NOT_IMPLEMENTED` são esperados nesta etapa. O teste valida a comunicação de diagnóstico dos incrementos 1 e 2; aquisição dos sensores e reconexão após perda de rede não foram exercitadas por esse comando. O IP registrado é o observado neste teste e pode mudar com DHCP.

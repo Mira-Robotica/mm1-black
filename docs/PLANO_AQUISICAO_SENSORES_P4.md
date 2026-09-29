@@ -1,6 +1,6 @@
 # Plano incremental: validação dos sensores da trena por aquisição Wi-Fi sob demanda
 
-Status: incremento 1 implementado; compilação, gravação, conexão Wi-Fi e ping confirmados pelo usuário em 28/09/2026. Teste de `STATUS` via Python e demais verificações de bancada pendentes. Incrementos 2–6 permanecem planejados; o incremento 2 passa a preparar o cliente em Docker. Ver [instruções de Wi-Fi e ping](LAB_WIFI_P4.md). Base de código examinada: commit `684c16a` e arquivos locais. Revisão de escopo em 26/09/2026: aquisição em posições discretas do manipulador, por solicitação do Python, com timestamps no PC. Este plano substitui a proposta de streaming contínuo e sincronização temporal no ESP. O lote executa um número fixo de tentativas, incluindo falhas, e exporta quaternion junto dos ângulos e da qualidade.
+Status: incremento 1 implementado; compilação, gravação, conexão Wi-Fi e ping confirmados pelo usuário em 28/09/2026. Incremento 2 implementado em `./docker`, com build e testes simulados aprovados e consulta `STATUS` na placa real confirmada pelo usuário. Reconexão e demais verificações de bancada não cobertas pela consulta continuam pendentes. Incrementos 3–6 permanecem planejados. Ver [resultado na placa](LAB_WIFI_P4.md#resultado-na-placa-real) e [cliente Docker](../docker/README.md). Base de código examinada: commit `684c16a` e arquivos locais. Revisão de escopo em 26/09/2026: aquisição em posições discretas do manipulador, por solicitação do Python, com timestamps no PC. Este plano substitui a proposta de streaming contínuo e sincronização temporal no ESP. O lote executa um número fixo de tentativas, incluindo falhas, e exporta quaternion junto dos ângulos e da qualidade.
 
 ## 1. Objetivo e sequência do ensaio
 
@@ -277,7 +277,7 @@ Tratar inclinação e singularidades conforme a geometria da seção 2; médias 
 
 ## 7. Incrementos e critérios de aceite
 
-O incremento 1 já permitiu gravação, conexão e ping na placa, conforme relato do usuário. Falta verificar `STATUS` via Python e os demais critérios de bancada. As etapas 2–6 continuam como plano de implementação. A segunda etapa prepara primeiro o ambiente de aquisição no PC; a aquisição dos sensores passa para a terceira.
+O incremento 1 já permitiu gravação, conexão e ping na placa, conforme relato do usuário. O incremento 2 disponibiliza o ambiente de aquisição no PC, validado com servidores simulados e com uma consulta `STATUS` ao servidor real. A reconexão e os demais critérios de bancada não cobertos por essa consulta continuam pendentes. As etapas 3–6 continuam como plano de implementação; a aquisição dos sensores começa na terceira.
 
 ### Incremento 1: aplicação mínima e rede
 
@@ -287,9 +287,9 @@ O incremento 1 já permitiu gravação, conexão e ping na placa, conforme relat
 
 ### Incremento 2: contêiner Docker e teste Python de STATUS
 
-Criar um ambiente de execução Python com todos os arquivos necessários sob **`./docker`**, relativo à raiz deste repositório. Esta seção é somente o plano: não criar o contêiner nesta revisão. O primeiro uso será executar o teste de `STATUS` de [LAB_WIFI_P4.md](LAB_WIFI_P4.md), sem depender de uma instalação de Python no host nem da implementação de `CAPTURE`.
+**Implementado:** ambiente de execução Python autocontido em **`./docker`**, com imagem `python:3.12.14-slim-bookworm`, Compose em rede host, cliente `scripts/status.py`, configuração por argumentos/ambiente, registro JSONL opcional e testes. O primeiro uso é executar o teste de `STATUS` de [LAB_WIFI_P4.md](LAB_WIFI_P4.md), sem depender de Python no host nem de `CAPTURE`. Comandos: [docker/README.md](../docker/README.md).
 
-Estrutura prevista:
+Estrutura implementada:
 
 ```text
 docker/
@@ -302,10 +302,13 @@ docker/
   README.md
   scripts/
     status.py
+  tests/
+    mock_server.py
+    test_status.py
   data/                 # saídas persistentes dos testes; conteúdo ignorado pelo Git
 ```
 
-- Usar `./docker` como contexto de build, sem `COPY` de arquivos externos a esse diretório. Fixar a versão da imagem Python ao implementar e registrar as dependências de execução em `requirements.txt`. O teste inicial usa somente a biblioteca padrão (`socket`, `argparse` e tratamento de erros); não requer instalar pacotes para esses módulos. O arquivo pode inicialmente conter apenas um comentário indicando a ausência de dependências externas. Incluir e fixar novas bibliotecas conforme as etapas seguintes precisarem delas.
+- Usar `./docker` como contexto de build, sem `COPY` de arquivos externos a esse diretório. A versão Python está fixada no Dockerfile e `requirements.txt` registra que esta etapa usa somente a biblioteca padrão (`socket`, `argparse` e tratamento de erros); não requer instalar pacotes para esses módulos. Incluir e fixar novas bibliotecas conforme as etapas seguintes precisarem delas.
 - Disponibilizar um serviço/comando de execução única no Compose. IP da trena, porta (padrão 5000) e timeout (inicialmente 5 s para conexão/leitura) serão argumentos ou variáveis de ambiente, documentados em `.env.example`. A senha Wi-Fi pertence ao firmware e não é necessária ao cliente. O README deve mostrar a partir da raiz como construir e executar, por exemplo `docker compose -f docker/compose.yaml run --rm status --host <IP> --port 5000`.
 - Configurar o serviço com **`network_mode: host`** no Compose desde o primeiro teste, tendo **Docker Engine no Linux** como ambiente de referência. O contêiner compartilha a rede do PC, sem uma bridge ou NAT adicional do Docker no caminho; não declarar `ports` nem uma rede própria para esse serviço. O cliente continua abrindo uma conexão TCP para o IP e a porta da trena. Rotas, firewall e acesso à rede Wi-Fi continuam sendo responsabilidade do host; esse modo não resolve isolamento de clientes no AP. Não requer USB nem `privileged`. Referência: [rede host do Docker](https://docs.docker.com/engine/network/drivers/host/).
 - Manter o modo host na futura integração com o manipulador. Para uma API com apenas conexões TCP de saída, bridge também atenderia, mas descoberta por broadcast/multicast, portas dinâmicas ou conexões iniciadas pelo robô podem exigir configuração adicional nesse modo. Compartilhar a rede do PC simplifica esses caminhos; confirmar os requisitos quando a API for definida. Caso o cliente passe a abrir portas de escuta, elas precisam estar livres no host e acessíveis pelas regras locais de firewall. Docker Desktop não é o ambiente de referência desta etapa; seu modo host exige habilitação e tem limitações diferentes do Engine no Linux.
@@ -314,6 +317,8 @@ docker/
 - Manter esse mesmo ambiente nas próximas etapas, acrescentando captura, gravação e análise antes da integração com o robô. Reservar `docker/external/manipulador/` como localização proposta para o futuro submódulo, preservando o contexto autocontido; não criar nem adicionar um submódulo agora. Quando o outro repositório for escolhido, fixar sua revisão pelo Git, documentar a inicialização dos submódulos e incorporar suas dependências/API. O teste `STATUS` deve continuar funcionando sem esse submódulo.
 
 **Aceite:** em um checkout novo, com Docker Engine e Compose disponíveis no Linux, construir e executar usando somente os arquivos de `./docker` e o IP informado. Confirmar que o serviço usa `network_mode: host`, sem mapeamento de portas. Receber os dois cumprimentos e uma resposta `STATUS` válida da placa; conferir falha com diagnóstico e saída não zero para IP/porta incorretos, timeout e encerramento prematuro. Verificar respostas fragmentadas e malformadas com servidor simulado. Documentar o comando e o resultado real do teste, sem confundir ping com validação do protocolo TCP. Nenhuma aquisição de sensores ou movimentação do manipulador é necessária para concluir esta etapa.
+
+**Validação realizada:** imagem construída com sucesso; configuração Compose verificada para rede host, contexto e volume; 14 testes automatizados aprovados dentro da imagem, cobrindo protocolo, fragmentação, timeout, EOF, erros de configuração/conexão e registro. A execução do comando real do cliente contra outro contêiner simulador em loopback recebeu `HELLO`, `META` e `STATUS` e salvou o JSONL no host. Posteriormente, o usuário executou `docker compose -f docker/compose.yaml run --rm status` contra a placa real e recebeu as três mensagens esperadas: `wifi=CONNECTED`, `ip=192.168.0.10`, `rssi_dbm=-39`, `tcp=LISTENING`, `port=5000` e `hosted=1`. O teste de comunicação Docker → servidor embarcado foi aprovado; saída completa em [LAB_WIFI_P4.md](LAB_WIFI_P4.md#resultado-na-placa-real). Sensores ainda indisponíveis são o comportamento previsto neste incremento. Nenhuma alteração no firmware foi necessária nesta etapa.
 
 ### Incremento 3: aquisição unitária
 
@@ -355,4 +360,4 @@ Executar piloto com poses conhecidas, inicialmente cinco repetições por pose, 
 - [Rádio](../src/sap6_ble.cpp): `hostedSetPins` e inicialização Hosted; [inicialização de placa a excluir](../src/board/p4/p4_board.cpp).
 - [Datasheet BNO08x](datasheets/BNO080_085-Datasheet_v1.16.pdf), [calibração](datasheets/BNO08X-Sesnor-Calibration-Procedure.pdf) e [esquema da placa](datasheets/ESP32-P4-WIFI6-Touch-LCD-4.3-schematic.pdf).
 
-Incremento 1 implementado, com gravação, conexão Wi-Fi e ping confirmados pelo usuário. `STATUS` via Python permanece pendente. Docker, aquisição de sensores e integração com o manipulador ainda não foram implementados.
+Incrementos 1 e 2 implementados, com Wi-Fi/ping e `STATUS` via Docker na placa real confirmados pelo usuário, além dos testes simulados. Reconexão e demais verificações de bancada não cobertas pela consulta continuam pendentes. Aquisição de sensores e integração com o manipulador ainda não foram implementadas.
