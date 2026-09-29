@@ -5,6 +5,7 @@
 #include "board/p4/mm1_p4_pins.h"
 #include "firmware_version.h"
 #include "network.h"
+#include "capture_service.h"
 
 #if !defined(MM1_BOARD_P4) || !defined(MM1_LAB)
 #error "Build this entry point with env:mm1_p4_lab."
@@ -20,17 +21,19 @@ void setup()
 
     Serial.begin(115200);
     delay(300);
-    Serial.printf("\n[LAB] MM1-P4 network bring-up | firmware=%s\n", FW_VERSION);
+    Serial.printf("\n[LAB] MM1-P4 unit capture | firmware=%s\n", FW_VERSION);
     Serial.printf("[LAB] chip=%s revision=%u cpu=%lu MHz Arduino=%s IDF=%s\n",
                   ESP.getChipModel(), ESP.getChipRevision(),
                   static_cast<unsigned long>(ESP.getCpuFreqMHz()),
                   ESP_ARDUINO_VERSION_STR, ESP.getSdkVersion());
-    Serial.println("[LAB] Display/audio disabled. Sensors are not initialized in increment 1.");
+    Serial.println("[LAB] Display/audio disabled. Single sensor acquisition enabled.");
     lab::network_begin();
+    lab::capture_begin();
 }
 
 void loop()
 {
     lab::network_tick();
+    lab::capture_tick();
     delay(5);
 }

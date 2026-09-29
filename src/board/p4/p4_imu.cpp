@@ -36,6 +36,22 @@ int g_accuracy = 0;
 bool g_have_quat = false;
 float g_ax = 0.f, g_ay = 0.f, g_az = 0.f;
 bool g_have_accel = false;
+P4ImuSample g_sample{};
+P4ImuDiagnostics g_diag{};
+bool g_sample_valid = false, g_reconfigure = false, g_sequence_known = false;
+uint8_t g_last_sequence = 0;
+#if defined(MM1_LAB)
+// Bound an entire HAL read/write, not each stretched clock separately.
+// Full SH-2 packets (up to 384 payload bytes plus repeated I2C headers)
+// need more than 30 ms on this software bus, particularly at initialization.
+constexpr uint32_t kIoBudgetUs = 100000;
+bool g_budget_active = false;
+uint32_t g_budget_start = 0;
+struct IoBudget {
+    IoBudget() { g_budget_start = micros(); g_budget_active = true; }
+    ~IoBudget() { g_budget_active = false; }
+};
+#endif
 
 int g_sda = MM1_IMU_SDA;
 int g_scl = MM1_IMU_SCL;
@@ -86,8 +102,14 @@ int bb_read(int pin)
 bool bb_wait_scl_high(void)
 {
     bb_release(g_scl);
+#if defined(MM1_LAB)
+    if (g_budget_active && (uint32_t)(micros()-g_budget_start) >= kIoBudgetUs) return false;
+#endif
     const int32_t t0 = (int32_t)micros();
     while (!bb_read(g_scl)) {
+#if defined(MM1_LAB)
+        if (g_budget_active && (uint32_t)(micros()-g_budget_start) >= kIoBudgetUs) return false;
+#endif
         if ((int32_t)micros() - t0 > kStretchUs) {
             return false;
         }
@@ -282,6 +304,9 @@ void i2chal_close(sh2_Hal_t *self)
 
 int i2chal_read(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len, uint32_t *t_us)
 {
+#if defined(MM1_LAB)
+    IoBudget budget;
+#endif
     (void)self;
     if (t_us) {
         *t_us = (uint32_t)(micros());
@@ -289,12 +314,18 @@ int i2chal_read(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len, uint32_t *t_us)
 
     uint8_t header[4];
     if (!i2c_read_raw(header, 4)) {
+        ++g_diag.io_errors;
         return 0;
     }
 
     uint16_t packet_size = (uint16_t)header[0] | ((uint16_t)header[1] << 8);
     packet_size &= ~0x8000U;
-    if (packet_size == 0 || packet_size > len) {
+    if (packet_size == 0) {
+        ++g_diag.empty_reads;
+        return 0;
+    }
+    if (packet_size < 4 || packet_size > len) {
+        ++g_diag.io_errors;
         return 0;
     }
 
@@ -310,6 +341,7 @@ int i2chal_read(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len, uint32_t *t_us)
             read_size = std::min(kI2cChunk, (size_t)cargo_remaining + 4U);
         }
         if (!i2c_read_raw(chunk, read_size)) {
+            ++g_diag.io_errors;
             return 0;
         }
         uint16_t cargo_read;
@@ -329,10 +361,22 @@ int i2chal_read(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len, uint32_t *t_us)
 
 int i2chal_write(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len)
 {
+#if defined(MM1_LAB)
+    IoBudget budget;
+    if (len > kI2cChunk) {
+        ++g_diag.io_errors;
+        return -1; // Never acknowledge a truncated SHTP write as success.
+    }
+#endif
     (void)self;
     const uint16_t write_size = (uint16_t)std::min(kI2cChunk, (size_t)len);
     if (!i2c_write_raw(pBuffer, write_size)) {
+        ++g_diag.io_errors;
+#if defined(MM1_LAB)
+        return -1; // SHTP retries zero forever; a bus failure is not backpressure.
+#else
         return 0;
+#endif
     }
     return (int)write_size;
 }
@@ -348,6 +392,10 @@ void hal_callback(void *cookie, sh2_AsyncEvent_t *pEvent)
     (void)cookie;
     if (pEvent && pEvent->eventId == SH2_RESET) {
         g_reset = true;
+        g_reconfigure = true;
+        g_sample_valid = g_have_quat = g_have_accel = false;
+        g_sequence_known = false;
+        ++g_diag.resets;
     }
 }
 
@@ -356,9 +404,22 @@ void sensor_handler(void *cookie, sh2_SensorEvent_t *event)
     (void)cookie;
     sh2_SensorValue_t value;
     if (sh2_decodeSensorEvent(&value, event) != SH2_OK) {
+        ++g_diag.decode_errors;
         return;
     }
     if (value.sensorId == SH2_ROTATION_VECTOR) {
+        if (g_sequence_known && (uint8_t)(value.sequence-g_last_sequence) != 1)
+            ++g_diag.sequence_gaps;
+#if defined(MM1_LAB)
+        if (g_sequence_known && value.sequence == g_last_sequence) return;
+#endif
+        g_sequence_known = true;
+        g_last_sequence = value.sequence;
+        g_sample = {value.un.rotationVector.real, value.un.rotationVector.i,
+                    value.un.rotationVector.j, value.un.rotationVector.k,
+                    value.un.rotationVector.accuracy, (uint8_t)(value.status & 3),
+                    value.sequence, ++g_diag.generation};
+        g_sample_valid = true;
         g_qw = value.un.rotationVector.real;
         g_qx = value.un.rotationVector.i;
         g_qy = value.un.rotationVector.j;
@@ -409,8 +470,7 @@ bool imu_try_open(uint8_t addr)
     }
 
     sh2_setSensorCallback(sensor_handler, nullptr);
-    if (!enable_one(SH2_ROTATION_VECTOR, 20000) ||
-        !enable_one(SH2_ACCELEROMETER, 50000)) {
+    if (!p4_imu_enable_reports()) {
         Serial.println("p4_imu: enable reports failed");
         sh2_close();
         snprintf(g_fail_why, sizeof(g_fail_why), "reports @0x%02X", addr);
@@ -418,6 +478,7 @@ bool imu_try_open(uint8_t addr)
     }
 
     g_ok = true;
+    g_reconfigure = false;
     Serial.printf("p4_imu: OK addr=0x%02X SDA=%d SCL=%d part=%u\n", addr, g_sda,
                   g_scl, (unsigned)prod.entry[0].swPartNumber);
     return true;
@@ -427,8 +488,12 @@ bool imu_try_open(uint8_t addr)
 
 bool p4_imu_enable_reports(void)
 {
+#if defined(MM1_LAB)
+    return enable_one(SH2_ROTATION_VECTOR, 20000);
+#else
     return enable_one(SH2_ROTATION_VECTOR, 20000) &&
            enable_one(SH2_ACCELEROMETER, 50000);
+#endif
 }
 
 bool p4_imu_begin(uint8_t i2c_addr)
@@ -436,14 +501,26 @@ bool p4_imu_begin(uint8_t i2c_addr)
     g_ok = false;
     g_have_quat = false;
     g_have_accel = false;
+    g_sample_valid = false;
+    g_reconfigure = g_reset = g_sequence_known = false;
     g_addr = i2c_addr;
 
+#if !defined(MM1_LAB)
     imu_pin_survey();
+#endif
 
     const uint8_t addrs[2] = {i2c_addr, (uint8_t)((i2c_addr == 0x4B) ? 0x4A : 0x4B)};
     /* GPIO28/29 read stuck LOW on this board (J3 pin 20 is GND on a Pi-style
      * header). GPIO30/31 idle high — use those. */
-    const int pairs[][2] = {{30, 31}, {28, 29}};
+    const int pairs[][2] = {
+#if defined(MM1_LAB)
+        // Lab wiring confirmed on the bench: SDA=GPIO31, SCL=GPIO30.
+        {31, 30},
+#else
+        {30, 31},
+        {28, 29},
+#endif
+    };
 
     for (const auto &pair : pairs) {
         const int sda = pair[0];
@@ -460,6 +537,7 @@ bool p4_imu_begin(uint8_t i2c_addr)
                 return true;
             }
         }
+#if !defined(MM1_LAB)
         Serial.printf("p4_imu: no ACK on %d/%d — trying SDA/SCL swapped\n", sda, scl);
         if (!imu_bus_install(scl, sda)) {
             continue;
@@ -470,6 +548,7 @@ bool p4_imu_begin(uint8_t i2c_addr)
                 return true;
             }
         }
+#endif
     }
 
     snprintf(g_fail_why, sizeof(g_fail_why), "noACK idle=%d/%d", g_idle_sda,
@@ -483,15 +562,30 @@ void p4_imu_poll(void)
         return;
     }
     sh2_service();
-    if (g_reset) {
-        g_reset = false;
-        p4_imu_enable_reports();
+    if (g_reconfigure) {
+        g_reconfigure = false;
+        g_sample_valid = g_have_quat = g_have_accel = false;
+        g_ok = p4_imu_enable_reports();
+        if (!g_ok) Serial.println("p4_imu: reset report re-enable failed");
     }
 }
 
 bool p4_imu_ok(void)
 {
     return g_ok;
+}
+
+bool p4_imu_snapshot(P4ImuSample *sample)
+{
+    if (!g_ok || !g_sample_valid || !sample) return false;
+    *sample = g_sample;
+    return true;
+}
+
+P4ImuDiagnostics p4_imu_diagnostics()
+{
+    g_diag.ready = g_ok;
+    return g_diag;
 }
 
 bool p4_imu_was_reset(void)

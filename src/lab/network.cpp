@@ -11,12 +11,8 @@
 #include <string.h>
 
 #include "line_reader.h"
-
-#if __has_include("lab_config.h")
-#include "lab_config.h"
-#else
-#include "lab_config.example.h"
-#endif
+#include "settings.h"
+#include "capture_service.h"
 
 static_assert(LAB_TCP_PORT > 0 && LAB_TCP_PORT <= 65535, "Invalid TCP port");
 static_assert(LAB_WIFI_CONNECT_TIMEOUT_MS > 0 && LAB_WIFI_CONNECT_TIMEOUT_MS < 0x80000000UL,
@@ -39,7 +35,11 @@ WiFiServer server(LAB_TCP_PORT, 1);
 WiFiClient client;
 LabLineReader tcp_line;
 LabLineReader serial_line;
-char tx[640]{};
+char tx[2048]{};
+enum class Owner { None, Tcp, Serial };
+Owner owner = Owner::None;
+bool result_queued = false;
+uint32_t last_tcp_id = 0, last_serial_id = 0;
 size_t tx_size = 0;
 size_t tx_sent = 0;
 uint32_t tx_since = 0;
@@ -62,6 +62,10 @@ const char *state_name()
 
 void close_client()
 {
+    if (owner == Owner::Tcp) {
+        lab::capture_cancel(); owner = Owner::None; result_queued = false;
+    }
+    last_tcp_id = 0;
     client.stop();
     tcp_line.reset();
     tx_size = tx_sent = 0;
@@ -92,15 +96,20 @@ void format_status(char *out, size_t size)
 {
     const bool online = state == State::Connected;
     const String ip = online ? WiFi.localIP().toString() : String("0.0.0.0");
+    const auto imu = p4_imu_diagnostics();
     snprintf(out, size,
-             "# OK STATUS stage=network_only wifi=%s ip=%s rssi_dbm=%ld "
-             "tcp=%s port=%u hosted=%u sensors=NOT_IMPLEMENTED "
-             "attempt=%lu disconnect_reason=%u uptime_ms=%lu\n",
+             "# OK STATUS stage=unit_capture wifi=%s ip=%s rssi_dbm=%ld "
+             "tcp=%s port=%u hosted=%u sensors=ENABLED "
+             "attempt=%lu disconnect_reason=%u uptime_ms=%lu state=%s laser=%s imu=%s "
+             "imu_reports=%lu imu_resets=%lu imu_io_errors=%lu imu_decode_errors=%lu imu_sequence_gaps=%lu n_max=1\n",
              state_name(), ip.c_str(), online ? static_cast<long>(WiFi.RSSI()) : 0L,
              server_started ? "LISTENING" : "OFF", static_cast<unsigned>(LAB_TCP_PORT),
              static_cast<unsigned>(hostedIsInitialized()),
              static_cast<unsigned long>(attempt), disconnect_reason.load(),
-             static_cast<unsigned long>(millis()));
+             static_cast<unsigned long>(millis()), lab::capture_state(), lab::laser_state(),
+             imu.ready ? "READY" : "NOT_READY", (unsigned long)imu.generation,
+             (unsigned long)imu.resets, (unsigned long)imu.io_errors,
+             (unsigned long)imu.decode_errors, (unsigned long)imu.sequence_gaps);
 }
 
 void command(const char *line, bool from_serial)
@@ -109,9 +118,24 @@ void command(const char *line, bool from_serial)
     if (strcmp(line, "STATUS") == 0) {
         format_status(reply, sizeof(reply));
     } else if (strcmp(line, "CAPTURE") == 0 || strncmp(line, "CAPTURE ", 8) == 0) {
-        snprintf(reply, sizeof(reply), "# ERR NOT_IMPLEMENTED stage=network_only\n");
+        uint32_t id = 0, count = 0;
+        uint32_t &last = from_serial ? last_serial_id : last_tcp_id;
+        if (!lab::parse_capture(line, id, count)) {
+            snprintf(reply, sizeof(reply), "# ERR BAD_CAPTURE expected=CAPTURE_id_[1]\n");
+        } else if (count != 1) {
+            snprintf(reply, sizeof(reply), "# ERR N_RANGE n_max=1\n");
+        } else if (lab::capture_busy()) {
+            snprintf(reply, sizeof(reply), "# ERR BUSY\n");
+        } else if (id <= last) {
+            snprintf(reply, sizeof(reply), "# ERR DUPLICATE_ID\n");
+        } else if (lab::capture_start(id)) {
+            last = id; owner = from_serial ? Owner::Serial : Owner::Tcp;
+            result_queued = false;
+            snprintf(reply, sizeof(reply), "# OK CAPTURE request_id=%lu n=1 timeout_ms=9000\n",
+                     (unsigned long)id);
+        } else snprintf(reply, sizeof(reply), "# ERR BUSY\n");
     } else {
-        snprintf(reply, sizeof(reply), "# ERR BAD_COMMAND supported=STATUS\n");
+        snprintf(reply, sizeof(reply), "# ERR BAD_COMMAND supported=STATUS,CAPTURE\n");
     }
     if (from_serial) {
         Serial.print(reply);
@@ -150,11 +174,16 @@ void service_tcp()
             client.setNoDelay(true);
             client_activity = millis();
             ++connection_id;
-            char hello[192];
+            char hello[1024];
             snprintf(hello, sizeof(hello),
-                     "# HELLO MM1LAB 2 stage=network_only boot_id=%s connection_id=%lu\n"
-                     "# META capture=unavailable commands=STATUS\n",
-                     boot_id, static_cast<unsigned long>(connection_id));
+                     "# HELLO MM1LAB 2 stage=unit_capture boot_id=%s connection_id=%lu\n"
+                     "# META capture=single commands=STATUS,CAPTURE schema=2 n_max=1 timeout_ms=9000 "
+                     "imu_report=rotation_vector imu_interval_us=20000 quaternion_order=wxyz "
+                     "laser_axis=%.9g/%.9g/%.9g azimuth_reference=magnetic azimuth_offset_deg=0 "
+                     "distance_source=laser_report laser_trim_mm=0 quaternion_norm_tolerance=0.02 "
+                     "singularity_epsilon=1e-5 csv_header=per_capture\n",
+                     boot_id, static_cast<unsigned long>(connection_id),
+                     (double)IMU_LASER_AXIS_BX, (double)IMU_LASER_AXIS_BY, (double)IMU_LASER_AXIS_BZ);
             queue_reply(hello);
         }
     }
@@ -171,12 +200,23 @@ void service_tcp()
         const int sent = ::send(client.fd(), tx + tx_sent, tx_size - tx_sent, MSG_DONTWAIT);
         if (sent > 0) {
             tx_sent += static_cast<size_t>(sent);
+            if (tx_sent == tx_size && result_queued) {
+                result_queued = false; lab::capture_cancel(); owner = Owner::None;
+            }
         } else if (sent < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
             close_client();
         }
         if (tx_sent < tx_size && millis() - tx_since >= 2000UL) {
             close_client();
         }
+        return;
+    }
+    if (owner == Owner::Tcp && lab::capture_ready()) {
+        char response[sizeof(tx)];
+        if (!lab::format_sample(response, sizeof(response), lab::capture_sample())) {
+            close_client(); return;
+        }
+        queue_reply(response); result_queued = true;
         return;
     }
     for (size_t count = 0; count < 128 && client.available(); ++count) {
@@ -200,7 +240,7 @@ void start_server()
     server.begin();
     server_started = static_cast<bool>(server);
     Serial.printf("[LAB] TCP port=%u %s\n", static_cast<unsigned>(LAB_TCP_PORT),
-                  server_started ? "LISTENING (STATUS)" : "FAILED; retry in 10 s");
+                  server_started ? "LISTENING (STATUS,CAPTURE n=1)" : "FAILED; retry in 10 s");
 }
 
 void start_attempt()
@@ -264,6 +304,12 @@ void network_begin()
 void network_tick()
 {
     service_serial();
+    if (owner == Owner::Serial && lab::capture_ready()) {
+        char response[sizeof(tx)];
+        if (lab::format_sample(response, sizeof(response), lab::capture_sample())) Serial.print(response);
+        else Serial.println("# ERR FORMAT");
+        lab::capture_cancel(); owner = Owner::None;
+    }
     if (state == State::ConfigRequired || state == State::Fault) {
         return;
     }
