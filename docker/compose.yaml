@@ -1,0 +1,20 @@
+name: mm1-lab
+
+services:
+  status:
+    build:
+      context: .
+    image: mm1-lab-client:local
+    network_mode: host
+    user: "${LAB_UID:-1000}:${LAB_GID:-1000}"
+    environment:
+      LAB_HOST: "${LAB_HOST:-}"
+      LAB_PORT: "${LAB_PORT:-5000}"
+      LAB_TIMEOUT: "${LAB_TIMEOUT:-5}"
+      LAB_STATUS_LOG: "${LAB_STATUS_LOG:-}"
+    volumes:
+      - type: bind
+        source: ./data
+        target: /data
+        bind:
+          create_host_path: false

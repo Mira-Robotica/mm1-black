@@ -1,0 +1,9 @@
+*
+!Dockerfile
+!requirements.txt
+!scripts/
+!scripts/**
+!tests/
+!tests/**
+**/__pycache__/
+**/*.pyc

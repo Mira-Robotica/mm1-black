@@ -1,0 +1,2 @@
+# The STATUS client and its tests use only the Python standard library.
+# Add pinned third-party dependencies here as acquisition/robot support evolves.
