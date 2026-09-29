@@ -1,6 +1,6 @@
 # Plano incremental: validação dos sensores da trena por aquisição Wi-Fi sob demanda
 
-Status: incremento 1 implementado; compilação, gravação, conexão Wi-Fi e ping confirmados pelo usuário em 28/09/2026. Incremento 2 implementado em `./docker`, com build e testes simulados aprovados e consulta `STATUS` na placa real confirmada pelo usuário. Reconexão e demais verificações de bancada não cobertas pela consulta continuam pendentes. Incrementos 3–7 permanecem planejados. Ver [resultado na placa](LAB_WIFI_P4.md#resultado-na-placa-real) e [cliente Docker](../docker/README.md). Base de código examinada: commit `684c16a` e arquivos locais. Revisão de escopo em 26/09/2026: aquisição em posições discretas do manipulador, por solicitação do Python, com timestamps no PC. Este plano substitui a proposta de streaming contínuo e sincronização temporal no ESP. O lote executa um número fixo de tentativas, incluindo falhas, e exporta quaternion junto dos ângulos e da qualidade. Por decisão posterior do usuário, o azimute será magnético, sem offset ou declinação; comandos TCP para trim do laser e calibração nativa da IMU ficam para o incremento 7, após a integração e o piloto no manipulador.
+Status em 29/09/2026: incrementos 1 e 2 implementados, com gravação, Wi-Fi, ping e `STATUS` via Docker confirmados pelo usuário na placa real. Incremento 3 implementado e verificado em software: aquisição unitária, compilação P4, testes C++ e 24 testes Python aprovados; captura física de laser e IMU confirmada pelo usuário, com término informado como `COMPLETE/OK`, após corrigir exclusivamente o lab para SDA31/SCL30. Qualidade baixa foi preservada (`imu_status=0`, `accuracy_rad=3.14160156`); a análise de calibração/precisão foi adiada por decisão do usuário. Demais ensaios de bancada continuam pendentes. Incrementos 4–7 permanecem planejados. Ver [resultado da rede na placa](LAB_WIFI_P4.md#resultado-na-placa-real), [guia da aquisição unitária](LAB_SENSORES_P4.md) e [cliente Docker](../docker/README.md). A análise inicial partiu do commit `684c16a` e arquivos locais. Revisão de escopo em 26/09/2026: aquisição em posições discretas do manipulador, por solicitação do Python, com timestamps no PC. Este plano substitui a proposta de streaming contínuo e sincronização temporal no ESP. O lote executará um número fixo de tentativas, incluindo falhas, e exportará quaternion junto dos ângulos e da qualidade; o incremento 3 limita-se a uma tentativa por solicitação. Por decisão do usuário, o azimute é magnético, sem offset ou declinação; comandos TCP para trim do laser e calibração nativa da IMU ficam para o incremento 7, após a integração e o piloto no manipulador.
 
 ## 1. Objetivo e sequência do ensaio
 
@@ -31,10 +31,12 @@ SSID, senha, porta, tempos de espera e número de repetições são parâmetros.
 | CPU/revisão | A definição atual usa `esp32p4_es` e 360 MHz; o documento de portabilidade identifica ECO2 | Preservar esses valores até verificar a revisão física; não mudar para 400 MHz apenas por ser a frequência nominal de outra revisão. |
 | Rádio | ESP32-C6, ESP-Hosted por SDIO | P4 não possui Wi-Fi integrado. Usar o firmware de fábrica do C6 fornecido pela Waveshare; conexão Wi-Fi e ping já confirmados nesta placa. |
 | IMU | BNO086 segundo os comentários do driver, família BNO08x/SH-2 | Confirmar identificação do módulo por `sh2_getProdIds()` e registrar no ensaio. |
-| Barramento da IMU | I²C por software, SDA 30/SCL 31, endereço preferencial `0x4B` e alternativa `0x4A` | Preservar o transporte existente inicialmente; INT e RST não estão conectados. |
+| Barramento da IMU | I²C por software, **SDA 31/SCL 30 no laboratório**, endereço preferencial `0x4B` e alternativa `0x4A` | Ligação física confirmada pelo usuário; seleção exclusiva de `MM1_LAB`. Transporte existente preservado; INT e RST não estão conectados. |
 | Laser | UART1, RX 21/TX 22, `9600`, `SERIAL_8N1`, RX com buffer de 1024 bytes | Não compartilhar com `Serial`, que fica para diagnóstico USB/UART. |
 
 Referências locais: [PlatformIO](../platformio.ini), [placa](../boards/mm1_p4.json), [pinos](../src/board/p4/mm1_p4_pins.h), [portabilidade P4](ESP32_P4_PORT.md).
+
+A pinagem da IMU nesta bancada difere da ordem padrão documentada no projeto original: SCL está fisicamente no GPIO30 e SDA no GPIO31. O alvo `mm1_p4_lab` seleciona explicitamente esse par em `p4_imu.cpp`, sob `MM1_LAB`; o mapa de pinos, o comportamento de seleção dos alvos originais e os documentos gerais permanecem preservados. O primeiro teste real confirmou laser e resposta `PARTIAL`, mas a IMU não foi detectada com a ordem anterior. Após gravar a correção, o usuário confirmou `imu=READY` e captura válida dos dois sensores. A avaliação de calibração/precisão ficou para depois; registro em [LAB_SENSORES_P4.md](LAB_SENSORES_P4.md#verificações-realizadas-e-ensaio-pendente).
 
 Há comentários históricos conflitantes sobre os pinos SDIO. O caminho de `sap6_ble_begin()` usa **`hostedSetPins(18, 19, 14, 15, 16, 17, 54)`**, na ordem CLK, CMD, D0, D1, D2, D3 e RESET. O teste de rede chama essa mesma função diretamente em `src/lab/network.cpp`, antes de iniciar Wi-Fi, verificando seu retorno. Não transportar a checagem de prontidão baseada em MAC BLE para o teste sem Bluetooth; validar diretamente a inicialização Hosted e a conexão station.
 
@@ -140,7 +142,7 @@ A calibração nativa da IMU via SH-2 é uma operação distinta desses trims. D
 
 ## 3. Decisão: n tentativas por lote, incluindo resultados inválidos
 
-**Adotar `CAPTURE <request_id> [n]`: avaliar os dois sensores em cada uma das n tentativas e devolver uma linha por tentativa, tenha ela sucesso ou falha.** `n` é o número de tentativas, não uma meta de resultados bons. Uma falha comum de sensor não encerra o lote e não gera uma tentativa extra para substituí-la. Omitir `n` equivale a `n=1`. Aceitar inicialmente de 1 a 20 repetições, com memória e prazo limitados.
+**Adotar `CAPTURE <request_id> [n]`: avaliar os dois sensores em cada uma das n tentativas e devolver uma linha por tentativa, tenha ela sucesso ou falha.** `n` é o número de tentativas, não uma meta de resultados bons. Uma falha comum de sensor não encerra o lote e não gera uma tentativa extra para substituí-la. Omitir `n` equivale a `n=1`. O incremento 3 aceita somente 1; ampliar para 1–20 no incremento 4, com memória e prazo limitados.
 
 Para o script de validação, começar com **`n=5` por pose**, como escolha inicial de engenharia a ajustar em um ensaio piloto. Usar `n=1` para depuração e varreduras rápidas. Cinco repetições permitem observar dispersão inicial, mas não estabelecem por si só a suficiência estatística do ensaio. O custo cresce principalmente com as cinco medições sucessivas do laser.
 
@@ -170,14 +172,15 @@ O robô deve permanecer parado **durante todo o lote**, inclusive intervalos e t
 
 ## 4. Firmware mínimo e limites de espera
 
-| Arquivo futuro | Responsabilidade |
+| Arquivo | Responsabilidade |
 | --- | --- |
 | `src/lab/main.cpp` | `setup()` e `loop()` de laboratório; fonte original `src/main.cpp` preservada e excluída do alvo lab. |
 | `src/lab/network.*` | Incremento 1: Wi-Fi station, configuração direta dos pinos SDIO, reconexão e diagnóstico serial/TCP. |
 | `src/lab/laser_poll.*` | Parser e máquina de estados para uma transação do laser sob demanda. |
 | `src/board/p4/p4_imu.*` e `bno08x/*` | Transporte existente, Rotation Vector, novidade, qualidade e reset. |
 | `src/lab/orientation.*` | Conversão para os ângulos atuais, independente de UI. |
-| `src/lab/capture_service.*` | TCP, pedido ativo, contador de repetições, buffer limitado e respostas. |
+| `src/lab/capture_service.*` | Aquisição unitária, validade e novidade; contador de repetições no incremento 4. |
+| `src/lab/capture_format.cpp` | Parser do comando e serialização CSV/DONE; transporte permanece em `network.cpp`. |
 | `include/lab_config.example.h` e configuração local ignorada pelo Git | Wi-Fi, porta, limites e convenções angulares. |
 | `docker/` | Incremento 2: ambiente Python autocontido, configuração, dependências e teste TCP de `STATUS`. |
 | `docker/scripts/capture_sensors.py` | Evolução posterior: cliente reutilizável pelo script do manipulador, gravação e análise no PC. |
@@ -207,7 +210,7 @@ Criar `mm1_p4_lab` com lista positiva de fontes e dependências. Excluir da comp
 
 ## 5. Protocolo TCP de solicitação e resposta
 
-Servidor no P4, cliente no PC, porta configurável (padrão 5000), um cliente por vez. Protocolo ASCII por linhas terminadas em `\n`, aceitando `\r\n`. Esta revisão mantém a proposta ainda não implementada de **protocolo/schema 2**, com o cabeçalho atualizado abaixo; incompatível com o streaming proposto anteriormente.
+Servidor no P4, cliente no PC, porta configurável (padrão 5000), um cliente por vez. Protocolo ASCII por linhas terminadas em `\n`, aceitando `\r\n`. O incremento 3 implementa um subconjunto do **protocolo/schema 2**, limitado a `n=1`, com `stage=unit_capture` e cabeçalho CSV por captura (`csv_header=per_capture`). O contrato de lotes abaixo é o destino do incremento 4; é incompatível com o streaming proposto anteriormente. Ao ampliar esse contrato, atualizar também a identificação de etapa/metadados e o cliente Docker, sem alterar silenciosamente o formato que ele espera.
 
 | Comando | Comportamento |
 | --- | --- |
@@ -303,7 +306,7 @@ Tratar inclinação e singularidades conforme a geometria da seção 2; médias 
 
 ## 7. Incrementos e critérios de aceite
 
-O incremento 1 já permitiu gravação, conexão e ping na placa, conforme relato do usuário. O incremento 2 disponibiliza o ambiente de aquisição no PC, validado com servidores simulados e com uma consulta `STATUS` ao servidor real. A reconexão e os demais critérios de bancada não cobertos por essa consulta continuam pendentes. As etapas 3–7 continuam como plano de implementação; a aquisição dos sensores começa na terceira e os comandos de calibração ficam para depois da integração e do piloto no manipulador.
+O incremento 1 já permitiu gravação, conexão e ping na placa. O incremento 2 disponibiliza o ambiente no PC, validado com servidores simulados e com `STATUS` real. O incremento 3 acrescenta aquisição unitária, com compilação/testes de software aprovados e captura dos dois sensores confirmada na placa. A avaliação de calibração/precisão foi adiada; reconexão e demais critérios de bancada ainda precisam de verificação. As etapas 4–7 continuam planejadas e os comandos de calibração ficam para depois da integração e do piloto no manipulador.
 
 ### Incremento 1: aplicação mínima e rede
 
@@ -348,13 +351,19 @@ docker/
 
 ### Incremento 3: aquisição unitária
 
-Extrair laser e conversão angular, habilitar apenas Rotation Vector e implementar uma repetição com validade, qualidade, novidade e prazos. Exportar azimute magnético sem offset e distância original sem trim; não carregar ajustes de heading/distância da NVS. Não acrescentar comandos de calibração nesta etapa.
+**Implementado; captura unitária de laser e IMU confirmada na placa após correção da pinagem. Calibração/precisão e demais ensaios de aceite permanecem pendentes.** Laser, conversão angular, aquisição e formatação foram separados em `src/lab/`. O lab habilita apenas Rotation Vector a 50 Hz e executa uma repetição com validade, qualidade, novidade e prazos. Exporta azimute magnético sem offset e distância original sem trim, sem carregar ajustes de heading/distância da NVS. Não há comandos de calibração. O caminho da aplicação original continua disponível nos outros alvos.
+
+Para permitir ensaio remoto já nesta etapa, foi antecipado o subconjunto `CAPTURE <id> [1]` do incremento 4, com ACK/CSV/DONE, `BUSY`, IDs crescentes, cancelamento por desconexão e buffers limitados. `STATUS` agora inclui diagnóstico dos sensores. O cliente Docker ganhou `--capture ID` e registro JSONL com a resposta, sem alterar o modo de rede host. Os lotes de até 20 e a integração com poses continuam nas etapas seguintes. Instruções completas em [LAB_SENSORES_P4.md](LAB_SENSORES_P4.md).
+
+**Novidade e recuperação implementadas:** laser usa um único SINGLE após drenagem e mira, sem QUICK/READ_RES. Após timeout, resposta inválida ou cancelamento com medição pendente, bloqueia novas transações com `LASER_RESYNC_REQUIRED` e continua avaliando a IMU. Nesta etapa a recuperação exige desligar/ligar o conjunto incluindo o laser; a sequência automática segura depende de validação do módulo. A etapa IMU aguarda leitura SHTP vazia e callback posterior, sem aceitar cache, duplicata ou NACK como novidade. O driver preserva precisão fracionária/status/sequência, invalida cache em reset e limita cada operação HAL a 100 ms no lab. Quaternion inválido conserva componentes finitos e qualidade; singularidade conserva quaternion e ângulos definidos.
+
+**Verificação de software concluída em 29/09/2026:** build `mm1_p4_lab` e imagem Docker aprovados; 24 testes Python de STATUS/captura por TCP passaram; testes C++ de aquisição e driver passaram com verificadores de memória/comportamento indefinido. O driver compartilhado foi testado com GPIO/SH-2 simulados nas configurações lab e original. Os testes cobrem fórmulas, checksum/BCD/frame fragmentado, ausência de sensor, reset, cache, resposta tardia, prazos, qualidade fracionária, singularidade, CSV, ACK/DONE e persistência. Essa verificação inicial foi feita em software. Posteriormente, o usuário gravou o firmware e confirmou a captura do laser por TCP/serial com resultado `PARTIAL` e `IMU_NOT_READY`. Após confirmar SDA31/SCL30 na montagem, foi aplicada a correção exclusiva do lab; nova compilação e testes C++ da inicialização nos modos lab/original passaram. No teste seguinte com `--capture 1`, o usuário confirmou `laser=READY`, `imu=READY`, distância `1.40500009 m`, quaternion, ângulos e um par válido, com `COMPLETE/OK` informado no término. O relatório manteve `imu_status=0` e `accuracy_rad=3.14160156`: sucesso de aquisição não certifica boa calibração ou precisão. A análise de calibração foi adiada por decisão do usuário, sem antecipar os comandos do incremento 7. Os contadores acumulados de reset, I²C, decodificação e sequência foram registrados para investigação posterior, sem atribuir seus eventos à amostra. A saída e a observação sobre o espaçamento na transcrição de `DONE` estão no [guia de bancada](LAB_SENSORES_P4.md#captura-de-laser-e-imu-após-a-correção-da-pinagem).
 
 **Aceite:** a distância vem de uma transação nova e os ângulos de um relatório novo; getters repetidos não contam como novas amostras. Fórmulas coincidem com a aplicação para mesmo quaternion/eixo quando o offset de azimute dela é zero. Verificar que ajustes não nulos previamente salvos na NVS não afetam o azimute nem a distância exportados pelo laboratório. Quaternion e ângulos pertencem ao mesmo relatório; o CSV preserva w,x,y,z e precisão suficiente para recomputar os ângulos. Qualidade baixa permanece visível, `accuracy_rad` mantém a parte fracionária. Singularidade angular preserva o quaternion válido e sinaliza `angles_valid=0`. Testar checksum, frame fragmentado, falta de sensor, reset, cache antigo e resposta tardia; não há espera ilimitada.
 
 ### Incremento 4: protocolo e lote limitado
 
-Implementar `STATUS`, `CAPTURE`, identificação, ACK/dados/DONE, estados, limites de `n` e envio limitado.
+Ampliar `STATUS`/`CAPTURE` e ACK/dados/DONE do incremento 3 para lotes de 1–20 tentativas, resultado/estado do pedido, interrupções globais, diagnóstico após desconexão e recuperação limitada validada no laser real. Consolidar cabeçalho/metadados e atualizar o cliente para o contrato de lote. Preservar o atendimento da IMU mesmo quando o laser não puder iniciar outra medição com garantia de novidade.
 
 **Aceite:** `n=1`, `n=5` e `n=20` entregam contagens/índices corretos; valores fora de 1–20 são recusados. Injetar falha no primeiro e no meio do lote e falhas em todas as tentativas: em todos esses casos os índices vão até `n`, com erros separados e contagens corretas. Verificar que falha do laser não impede tentar a IMU e vice-versa, sem tentativas extras para obter sucessos. Distinguir `COMPLETE/ERROR` com `n` linhas de `INTERRUPTED`. Testar pedido com sensores indisponíveis, recuperação limitada, `BUSY`, ID repetido, linha longa, TCP fragmentado, prazo global, cliente lento e reconexão. Pedido aceito termina uma vez se a conexão permitir; desconexão desliga laser e impede contaminação do próximo pedido por respostas antigas. `STATUS` continua responsivo durante a espera do laser.
 
@@ -398,4 +407,4 @@ Acrescentar uma interface de calibração no servidor TCP e no cliente Python so
 - [Rádio](../src/sap6_ble.cpp): `hostedSetPins` e inicialização Hosted; [inicialização de placa a excluir](../src/board/p4/p4_board.cpp).
 - [Datasheet BNO08x](datasheets/BNO080_085-Datasheet_v1.16.pdf), [calibração](datasheets/BNO08X-Sesnor-Calibration-Procedure.pdf) e [esquema da placa](datasheets/ESP32-P4-WIFI6-Touch-LCD-4.3-schematic.pdf).
 
-Incrementos 1 e 2 implementados, com Wi-Fi/ping e `STATUS` via Docker na placa real confirmados pelo usuário, além dos testes simulados. Reconexão e demais verificações de bancada não cobertas pela consulta continuam pendentes. Aquisição de sensores e integração com o manipulador ainda não foram implementadas.
+Incrementos 1 e 2 confirmados na placa para Wi-Fi/ping e `STATUS` via Docker. Incremento 3 implementado e verificado em software, com guia de teste em [LAB_SENSORES_P4.md](LAB_SENSORES_P4.md); a captura de laser e IMU foi confirmada na placa com SDA31/SCL30. A análise de calibração/precisão ficou para depois e os demais ensaios de bancada continuam pendentes. Lotes, integração com o manipulador e comandos de calibração continuam planejados nos incrementos 4–7.
