@@ -1,6 +1,6 @@
 # Plano incremental: validação dos sensores da trena por aquisição Wi-Fi sob demanda
 
-Status: incremento 1 implementado; compilação, gravação, conexão Wi-Fi e ping confirmados pelo usuário em 28/09/2026. Incremento 2 implementado em `./docker`, com build e testes simulados aprovados e consulta `STATUS` na placa real confirmada pelo usuário. Reconexão e demais verificações de bancada não cobertas pela consulta continuam pendentes. Incrementos 3–6 permanecem planejados. Ver [resultado na placa](LAB_WIFI_P4.md#resultado-na-placa-real) e [cliente Docker](../docker/README.md). Base de código examinada: commit `684c16a` e arquivos locais. Revisão de escopo em 26/09/2026: aquisição em posições discretas do manipulador, por solicitação do Python, com timestamps no PC. Este plano substitui a proposta de streaming contínuo e sincronização temporal no ESP. O lote executa um número fixo de tentativas, incluindo falhas, e exporta quaternion junto dos ângulos e da qualidade.
+Status: incremento 1 implementado; compilação, gravação, conexão Wi-Fi e ping confirmados pelo usuário em 28/09/2026. Incremento 2 implementado em `./docker`, com build e testes simulados aprovados e consulta `STATUS` na placa real confirmada pelo usuário. Reconexão e demais verificações de bancada não cobertas pela consulta continuam pendentes. Incrementos 3–7 permanecem planejados. Ver [resultado na placa](LAB_WIFI_P4.md#resultado-na-placa-real) e [cliente Docker](../docker/README.md). Base de código examinada: commit `684c16a` e arquivos locais. Revisão de escopo em 26/09/2026: aquisição em posições discretas do manipulador, por solicitação do Python, com timestamps no PC. Este plano substitui a proposta de streaming contínuo e sincronização temporal no ESP. O lote executa um número fixo de tentativas, incluindo falhas, e exporta quaternion junto dos ângulos e da qualidade. Por decisão posterior do usuário, o azimute será magnético, sem offset ou declinação; comandos TCP para trim do laser e calibração nativa da IMU ficam para o incremento 7, após a integração e o piloto no manipulador.
 
 ## 1. Objetivo e sequência do ensaio
 
@@ -63,11 +63,11 @@ O código trabalha com `float` após decodificar os campos do protocolo. No Rota
 
 ### Orientação exportada: ângulos e quaternion
 
-Reaproveitar as fórmulas de `imu_update_angles_from_quat()` e `imu_vec_body_to_world()` em uma função independente de UI, executada para **cada Rotation Vector novo selecionado para uma repetição**. Exportar também o quaternion do **mesmo relatório** usado nessa conversão, para auditoria do cálculo e comparação direta de rotações no Python. A tela SENSOR em `refresh_sensor_display()` apresenta:
+Reaproveitar as fórmulas de `imu_update_angles_from_quat()` e `imu_vec_body_to_world()` em uma função independente de UI, **retirando a soma do offset de azimute no firmware de laboratório**. Executar para cada Rotation Vector novo selecionado para uma repetição. Exportar também o quaternion do mesmo relatório usado nessa conversão, para auditoria do cálculo e comparação direta de rotações no Python. A relação com a tela SENSOR em `refresh_sensor_display()` será:
 
 | Coluna proposta | Valor existente | Convenção a preservar |
 | --- | --- | --- |
-| `azimuth_deg` | `imu_azimuth_deg` | Azimute do eixo do laser, normalizado em [0, 360), com o offset angular configurado. |
+| `azimuth_deg` | Fórmula de `imu_azimuth_deg`, sem somar `g_azimuth_offset_deg` | Azimute do eixo do laser em relação ao norte magnético, normalizado em [0, 360), sem declinação ou zeramento de heading. |
 | `inclination_deg` | `imu_inclination_deg` | Inclinação do eixo do laser, de −90° a +90°, positiva acima da horizontal. |
 | `roll_deg` | `imu_roll` | Roll de Euler calculado pela fórmula atual, aproximadamente de −180° a +180°. |
 
@@ -75,9 +75,9 @@ Acrescentar `qw,qx,qy,qz`, respectivamente `rotationVector.real/i/j/k`, na ordem
 
 O Python poderá reproduzir as fórmulas com esses valores e os mesmos parâmetros para conferir os ângulos do firmware. Para comparar rotações, verificar a norma original e normalizar apenas uma cópia de um quaternion finito e não nulo, preservando o registro original. Normas incompatíveis com uma rotação unitária devem ser sinalizadas, não corrigidas silenciosamente para esconder erro. Bibliotecas podem adotar ordem diferente e normalização automática; no SciPy, a ordem w,x,y,z exige `scalar_first=True`: [documentação de quaternions](https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.transform.Rotation.from_quat.html).
 
-Azimute e inclinação do feixe não devem ser substituídos diretamente pelos valores internos `imu_yaw` e `imu_pitch`. A aplicação normaliza o vetor `IMU_LASER_AXIS_BX/BY/BZ`, gira esse vetor pelo quaternion e obtém `(wx, wy, wz)` no referencial usado pelo código (+X leste, +Y norte, +Z para cima). Então calcula `azimuth = norm_deg360(atan2(wx, wy) × 180/π + offset)` e `inclination = atan2(wz, sqrt(wx² + wy²)) × 180/π`. Manter também a fórmula atual de roll, sem reinterpretá-lo como rotação em torno de um eixo de laser arbitrário.
+Azimute e inclinação do feixe não devem ser substituídos diretamente pelos valores internos `imu_yaw` e `imu_pitch`. Normalizar o vetor `IMU_LASER_AXIS_BX/BY/BZ`, girá-lo pelo quaternion e obter `(wx, wy, wz)` no referencial magnético usado pelo código (+X leste magnético, +Y norte magnético, +Z para cima). No laboratório, calcular **`azimuth = norm_deg360(atan2(wx, wy) × 180/π)`**, sem o termo `+ offset` da aplicação original, e `inclination = atan2(wz, sqrt(wx² + wy²)) × 180/π`. Manter também a fórmula atual de roll, sem reinterpretá-lo como rotação em torno de um eixo de laser arbitrário.
 
-O eixo de montagem e `azimuth_offset_deg` serão parâmetros explícitos do teste, registrados nos metadados e fixos durante o ensaio. Para reproduzir os números da aplicação, usar os mesmos valores efetivos, incluindo eventual ajuste que hoje está salvo na NVS; copiar esse valor para a configuração do teste, sem carregar toda a persistência/UI. O padrão no código é −21,7°, mas ele não comprova a declinação atual do local. Offset zero permite ensaio referido ao norte magnético, devendo ser identificado como tal. Não aplicar tare automaticamente.
+O eixo de montagem será um parâmetro explícito, registrado nos metadados e fixo durante o ensaio. Registrar **`azimuth_reference=magnetic` e `azimuth_offset_deg=0`** como descrição do dado exportado, não como um offset ajustável. Não carregar o valor de heading salvo na NVS nem o padrão −21,7° da aplicação original. Não aplicar declinação, `Head=0`, tare ou outra rotação de referência ao quaternion exportado. A transformação do referencial magnético para a base do manipulador será medida e aplicada no Python, mantendo os dados adquiridos no referencial original. Por isso, a igualdade com o azimute mostrado pela aplicação original só é esperada quando o offset dela for zero; inclinação e roll conservam as fórmulas existentes.
 
 Exportar os ângulos com casas decimais suficientes para análise, sem limitar à única casa exibida na tela. Nas comparações, tratar a passagem 359° → 0° como continuidade circular. Perto do feixe vertical, o azimute fica indefinido/sensível; nas singularidades de Euler, roll também exige cuidado. Essas limitações geométricas não são corrigidas por um status alto da IMU.
 
@@ -88,7 +88,7 @@ Correções mínimas necessárias para que o teste represente os dados recebidos
 - Expor novidade por callback/contador e preservar `sequence` e `status`. Os getters atuais podem retornar repetidamente o mesmo cache; uma repetição do ensaio deve consumir um relatório novo. Não exportar timestamps SH-2 nem reconstruí-los para sincronização.
 - Continuar atendendo a IMU mesmo sem pedido, com Rotation Vector a 50 Hz e sem batching intencional, para manter a fusão e evitar acúmulo. Relatórios não selecionados para o pedido são descartados deliberadamente; não há requisito de transmitir todos os 50 relatórios/s.
 - Ao detectar `SH2_RESET`, invalidar o cache, registrar a ocorrência e verificar o sucesso de `p4_imu_enable_reports()`. Hoje `p4_imu_poll()` consome o sinal de reset e não verifica esse retorno; não depender somente de `p4_imu_was_reset()` no chamador.
-- Preservar inicialmente a configuração de calibração do sensor; registrar reinicializações, status e condições de calibração. Aplicar aos ângulos somente o eixo e o offset explicitamente registrados, conforme a convenção acima.
+- Preservar inicialmente a configuração de calibração interna do sensor; registrar reinicializações, status e condições de calibração. A conversão angular usa o eixo de montagem registrado, sem offset de azimute. Essa decisão não desabilita a calibração interna do BNO; apenas remove a correção de heading da aplicação. O controle explícito da calibração nativa por TCP fica para o incremento 7, sem recalibrar ou zerar automaticamente a cada pose.
 
 ### Laser: extrair o polling existente
 
@@ -113,6 +113,30 @@ Extrair o parser, comandos e máquina de estados para `src/lab/laser_poll.*`. Tr
 Não usar `lzr_measure_once_blocking()` ou `lzr_sync_for_capture()` no caminho normal. Mesmo a rotina periódica atual contém `delay(25)`, esperas de recuperação e `flush()` de UART. Converter as esperas maiores em prazos da máquina de estados, preservando ordem e tempos mínimos dos comandos. Medir o bloqueio residual: 9 bytes a 9600 baud/8N1 já exigem aproximadamente 9,4 ms no fio. O I²C por software também tem espera de clock stretching de até 50 ms por tentativa; medir e limitar o orçamento total de atendimento em falhas.
 
 O parser tem uma aceitação alternativa mais permissiva em `lzr_try_decode13()`. Comparar frames reais, checksum, campos de erro e protocolo do módulo antes de tratá-los como distância válida. Não transportar silenciosamente um erro de sensor como zero. Em recuperação, `lzr_last_valid_ms` hoje é atualizado sem uma nova medição: não usá-lo como evidência de novidade. Só uma resposta válida de uma transação nova pode fornecer distância para o pedido. Fallbacks como `CMD_READ_RES` só podem ser aproveitados após confirmar que não retornam uma medição anterior; caso contrário, finalizar somente a tentativa desse sensor com erro explícito e continuar o lote.
+
+### Trim do laser: significado e escopo da aquisição
+
+No firmware original, `laser_raw_m()` fornece a distância retornada pelo módulo em metros, antes da correção da aplicação; “crua” aqui não significa leitura de ADC. `laser_used_m()` chama `mm1_distance_at_ref_m(laser_raw_m(), 0, g_mm1_range_offset_mm)`. Em [mm1_geometry.h](../include/mm1_geometry.h), a correção efetiva é:
+
+```cpp
+if (!isfinite(laser_m))
+    return laser_m;
+const float d = laser_m + trim_mm * 0.001f;
+return (d > 0.f) ? d : 0.f;
+```
+
+Para entradas finitas, `D_usada_m = max(0, D_laser_m + trim_mm / 1000)`. O trim é uma correção aditiva constante: positivo aumenta a distância e negativo diminui. Por exemplo, 2,000 m com +15 mm resulta em 2,015 m; com −15 mm, em 1,985 m. A UI limita o ajuste a ±300 mm, começa em zero e salva o valor na NVS. Ele pode compensar um desvio constante ou uma mudança do ponto de referência ao longo do feixe; não altera a medição interna do módulo, não corrige ganho/escala, ruído nem orientação. O argumento `proj_top` é ignorado nessa função: ela não acrescenta automaticamente o comprimento da carcaça.
+
+Nos incrementos 3–6, **`distance_m` será a distância original de uma transação nova do laser**, sem trim da aplicação, sem carregar esse ajuste da NVS e sem importar a saturação em zero como tratamento de falha. Registrar `distance_source=laser_report` e `laser_trim_mm=0`. Falhas continuam sendo campos vazios com validade/erro explícitos. A configuração remota do trim fica para o incremento 7. Nessa etapa, preservar `distance_m` original e acrescentar uma distância corrigida identificada separadamente, com o trim efetivo nos metadados e revisão do schema; não mudar silenciosamente o significado da coluna existente.
+
+A palavra “trim” aparece em contextos distintos no código:
+
+- **Menu `Trim` / `Laser trim` / `g_mm1_range_offset_mm`:** o ajuste de distância em milímetros descrito acima.
+- **`Heading trim`, na página IMU:** nome dado ao próprio `g_azimuth_offset_deg`, em graus. A aplicação soma esse valor ao azimute; pode representar declinação ou um ajuste empírico. `Head=0` altera esse mesmo offset para zerar a direção atual, sem ser uma calibração nativa dos sensores do BNO. Nenhum deles será aplicado ao azimute do laboratório.
+- **`trim_mm` nos auxiliares de geometria:** o mesmo tipo de ajuste linear. `mm1_laser_delta_mm()` apenas o retorna; `mm1_imu_arm_mm()` calcula `abs(mm1_imu_x_base_mm(proj_top) + trim_mm)`. Não há chamadas desses dois auxiliares no código examinado; eles não acrescentam outra correção ao caminho atual de `laser_used_m()`.
+- **`String.trim()` em comandos de texto:** remove espaços em branco nas extremidades da string; não tem relação com calibração.
+
+A calibração nativa da IMU via SH-2 é uma operação distinta desses trims. Da mesma forma, o comando `Zero C` do laser, condicionado ao protocolo alternativo `LZR_PROTO_ILIASAM`, envia um comando ao módulo; não é a soma de `trim_mm` e não será incorporado implicitamente ao teste.
 
 ## 3. Decisão: n tentativas por lote, incluindo resultados inválidos
 
@@ -190,15 +214,17 @@ Servidor no P4, cliente no PC, porta configurável (padrão 5000), um cliente po
 | `STATUS` | Informa estado, sensores, pedido ativo/último resultado e parâmetros de timeout; disponível também durante coleta. |
 | `CAPTURE <request_id> [n]` | Em `IDLE`, aceita um pedido de 1 a 20 tentativas; padrão 1, inclusive com sensor indisponível. Responde ACK, depois dados e marcador de término. Em outro estado, responde erro sem enfileirar trabalho. |
 
+Essa tabela define o escopo até a integração com o manipulador. Os comandos TCP de consulta/ajuste do trim do laser e de controle da calibração nativa da IMU serão acrescentados no incremento 7, com sintaxe e respostas próprias. Não confundir essa extensão com um comando de offset de azimute: a orientação adquirida continuará magnética, sem declinação ou zeramento de heading.
+
 O Python usa `request_id` inteiro positivo de 32 bits, estritamente crescente dentro da conexão. O ESP rejeita IDs já aceitos ou anteriores (`DUPLICATE_ID`); não refaz medições automaticamente. A combinação `boot_id`, `connection_id` e `request_id` identifica o pedido no log. Reinício do ESP muda `boot_id`; nova conexão muda `connection_id`. A associação a `pose_id` fica no Python, sem o ESP precisar conhecer o robô.
 
 Ao conectar, emitir `# HELLO`, metadados `# META` (incluindo limites de espera) e um cabeçalho CSV uma única vez. Um pedido aceito recebe `# OK CAPTURE` com ID, `n` e `timeout_ms`. Guardar no máximo 20 registros do lote e devolvê-los ao concluir todas as tentativas ou sofrer uma interrupção global, seguidos por **`# DONE`** com o mesmo ID. O Python espera `DONE`, não apenas o ACK ou a primeira linha.
 
-Exemplo ilustrativo com três tentativas: a primeira falha no laser, mas a IMU responde; as outras duas têm sucesso. Para simplificar os valores, o exemplo usa eixo do laser +X e offset de azimute zero. Os quaternions identidade e seu negativo representam a mesma orientação:
+Exemplo ilustrativo com três tentativas: a primeira falha no laser, mas a IMU responde; as outras duas têm sucesso. O exemplo usa eixo do laser +X; o azimute sem offset e a distância sem trim seguem a convenção obrigatória dos incrementos 3–6. Os quaternions identidade e seu negativo representam a mesma orientação:
 
 ```text
 # HELLO MM1LAB 2 boot_id=b1 connection_id=1 state=IDLE
-# META schema=2 imu_report=rotation_vector imu_interval_us=20000 n_max=20 quaternion_order=wxyz laser_axis=1/0/0 azimuth_offset_deg=0
+# META schema=2 imu_report=rotation_vector imu_interval_us=20000 n_max=20 quaternion_order=wxyz laser_axis=1/0/0 azimuth_reference=magnetic azimuth_offset_deg=0 distance_source=laser_report laser_trim_mm=0
 request_id,sample_index,distance_m,laser_valid,laser_error,qw,qx,qy,qz,azimuth_deg,inclination_deg,roll_deg,angles_valid,angle_error,accuracy_rad,imu_status,imu_seq,imu_valid,imu_error
 CAPTURE 15 3
 # OK CAPTURE request_id=15 n=3 timeout_ms=23000
@@ -238,7 +264,7 @@ Não há comandos `START`, `PAUSE`, `STOP` ou `DELAY`: uma solicitação tem in�
 
 ### Dados e horários
 
-O CSV transmitido contém distância em metros, azimute/inclinação/roll em graus, `accuracy_rad` em ponto flutuante, `imu_status` 0–3, sequência, validades de sensor/ângulos e erros. Campos ausentes ficam vazios; ponto decimal e vírgula como separador. Acrescentar `qw/qx/qy/qz` do mesmo relatório dos ângulos e erros separados por sensor. Não exportar aceleração nem timestamps do ESP.
+O CSV transmitido contém a distância original do módulo em metros (`distance_m`, sem trim), azimute magnético sem offset/inclinação/roll em graus, `accuracy_rad` em ponto flutuante, `imu_status` 0–3, sequência, validades de sensor/ângulos e erros. Campos ausentes ficam vazios; ponto decimal e vírgula como separador. Acrescentar `qw/qx/qy/qz` do mesmo relatório dos ângulos e erros separados por sensor. Não exportar aceleração nem timestamps do ESP.
 
 O Python salva as leituras individuais e acrescenta `run_id`, `pose_id`, IDs de conexão/pedido e contexto da pose. Em uma tabela de pedidos ou arquivo auxiliar, guardar:
 
@@ -246,7 +272,7 @@ O Python salva as leituras individuais e acrescenta `run_id`, `pose_id`, IDs de 
 - `pc_request_utc_ns` antes do envio e `pc_done_utc_ns` ao receber o término; em falha, registrar horário e motivo da interrupção.
 - Duração usando `time.monotonic_ns()`; datas usando `time.time_ns()`. O primeiro serve para intervalos sem saltos do relógio civil, o segundo para rotular o ensaio no relógio do PC. Referência: [documentação Python de time](https://docs.python.org/3/library/time.html).
 - `n` solicitado, recebido, válido por sensor e por par, conclusão do lote, erros por tentativa, acomodação, critérios de estabilidade/qualidade e motivo de qualquer exclusão. Salvar também lotes inteiramente inválidos; não descartá-los por não permitirem calcular média.
-- Firmware/commit, placa, SDK, identificação dos sensores, parâmetros, eixo de montagem, offset de azimute, ordem/convenção dos quaternions, tolerância de norma, critérios de singularidade e calibração conhecida. Nunca registrar senha Wi-Fi.
+- Firmware/commit, placa, SDK, identificação dos sensores, parâmetros, eixo de montagem, referência magnética, offset de azimute fixo em zero, distância original sem trim, ordem/convenção dos quaternions, tolerância de norma, critérios de singularidade e calibração conhecida. Registrar também a transformação medida entre o referencial magnético e a base do robô, separadamente dos dados originais. Nunca registrar senha Wi-Fi.
 
 Os horários do PC delimitam a transação observada pelo cliente. Não são o instante exato da medição física nem tornam simultâneas as leituras de um lote. A associação à pose vem dos IDs e da manutenção da posição durante a aquisição. Não é necessário sincronizar o ESP com o PC ou com o relógio do robô.
 
@@ -254,16 +280,16 @@ Oferecer uma função reutilizável `capture(request_id, n=1)` que aguarda a res
 
 ### Comparar a mesma grandeza no mesmo referencial
 
-Antes de comparar números, definir a transformação fixa entre efetuador e IMU e a relação entre a base do robô e o referencial da orientação da trena. A orientação do robô deve ser transformada para a orientação esperada da IMU; então usar as mesmas convenções de eixo do laser, azimute, inclinação e roll da seção 2.
+Antes de comparar números, definir a transformação fixa entre efetuador e IMU e medir a transformação entre o referencial magnético da trena e a base do robô. Não passar pelo norte geográfico nem aplicar declinação magnética: o experimento determinará diretamente essa relação de referenciais. Manter essa transformação no Python e nos metadados, sem modificar as leituras originais. A orientação do robô deve ser transformada para a orientação esperada da IMU; então usar as mesmas convenções de eixo do laser, azimute, inclinação e roll da seção 2.
 
 Não subtrair diretamente “yaw do robô” de “azimute da trena”: podem ter eixos, ordem de Euler, sinais e referências diferentes. Preferir guardar também o quaternion retornado pelo robô, com sua ordem e convenções originais registradas. Converter no Python para a mesma ordem e o mesmo referencial do quaternion exportado pela trena. Para distâncias, registrar também a geometria do alvo e a posição do emissor, caso o robô seja usado para construir a referência de distância.
 
 Fazer duas verificações independentes:
 
-- **Cálculo da trena:** recalcular os ângulos com o quaternion exportado, o mesmo eixo/offset e as fórmulas do firmware. Comparar apenas ângulos geometricamente definidos, com tolerância numérica documentada.
+- **Cálculo da trena:** recalcular os ângulos com o quaternion exportado, o mesmo eixo do laser e as fórmulas do firmware, sem offset. Comparar apenas ângulos geometricamente definidos, com tolerância numérica documentada.
 - **Orientação contra o robô:** alinhar os referenciais e a montagem, validar e normalizar cópias dos quaternions, e calcular o ângulo da rotação relativa. Para quaternions unitários no mesmo referencial, usar `erro_deg = 2 × acos(clamp(abs(dot(q_trena, q_ref)), 0, 1)) × 180/π`. O valor absoluto trata a equivalência entre `q` e `-q`; não subtrair componentes nem converter para Euler para calcular esse erro. Uma alternativa é compor a rotação relativa e obter sua magnitude: [SciPy Rotation.magnitude](https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.transform.Rotation.magnitude.html).
 
-Essa comparação por quaternion evita as singularidades da representação de Euler; não corrige erros do sensor ou desalinhamento de referenciais. O offset adicionado ao azimute exibido não está aplicado ao quaternion exportado: não misturar esses dois caminhos de comparação.
+Essa comparação por quaternion evita as singularidades da representação de Euler; não corrige erros do sensor ou desalinhamento de referenciais. No laboratório, tanto o quaternion quanto o azimute derivado permanecem referidos ao quadro magnético, sem correção de declinação. Aplicar a transformação para o referencial do robô somente em cópias destinadas à análise.
 
 A pose retornada pelo robô é uma referência de comparação com sua própria incerteza, não uma verdade absoluta sem erro. O Rotation Vector usa magnetômetro: avaliar a influência da estrutura metálica, motores e cabos do manipulador, inclusive em repouso. Um offset fixo não necessariamente corrige uma perturbação que muda com a pose.
 
@@ -277,7 +303,7 @@ Tratar inclinação e singularidades conforme a geometria da seção 2; médias 
 
 ## 7. Incrementos e critérios de aceite
 
-O incremento 1 já permitiu gravação, conexão e ping na placa, conforme relato do usuário. O incremento 2 disponibiliza o ambiente de aquisição no PC, validado com servidores simulados e com uma consulta `STATUS` ao servidor real. A reconexão e os demais critérios de bancada não cobertos por essa consulta continuam pendentes. As etapas 3–6 continuam como plano de implementação; a aquisição dos sensores começa na terceira.
+O incremento 1 já permitiu gravação, conexão e ping na placa, conforme relato do usuário. O incremento 2 disponibiliza o ambiente de aquisição no PC, validado com servidores simulados e com uma consulta `STATUS` ao servidor real. A reconexão e os demais critérios de bancada não cobertos por essa consulta continuam pendentes. As etapas 3–7 continuam como plano de implementação; a aquisição dos sensores começa na terceira e os comandos de calibração ficam para depois da integração e do piloto no manipulador.
 
 ### Incremento 1: aplicação mínima e rede
 
@@ -322,9 +348,9 @@ docker/
 
 ### Incremento 3: aquisição unitária
 
-Extrair laser e conversão angular, habilitar apenas Rotation Vector e implementar uma repetição com validade, qualidade, novidade e prazos.
+Extrair laser e conversão angular, habilitar apenas Rotation Vector e implementar uma repetição com validade, qualidade, novidade e prazos. Exportar azimute magnético sem offset e distância original sem trim; não carregar ajustes de heading/distância da NVS. Não acrescentar comandos de calibração nesta etapa.
 
-**Aceite:** a distância vem de uma transação nova e os ângulos de um relatório novo; getters repetidos não contam como novas amostras. Fórmulas coincidem com a aplicação para mesmo quaternion/eixo/offset. Quaternion e ângulos pertencem ao mesmo relatório; o CSV preserva w,x,y,z e precisão suficiente para recomputar os ângulos. Qualidade baixa permanece visível, `accuracy_rad` mantém a parte fracionária. Singularidade angular preserva o quaternion válido e sinaliza `angles_valid=0`. Testar checksum, frame fragmentado, falta de sensor, reset, cache antigo e resposta tardia; não há espera ilimitada.
+**Aceite:** a distância vem de uma transação nova e os ângulos de um relatório novo; getters repetidos não contam como novas amostras. Fórmulas coincidem com a aplicação para mesmo quaternion/eixo quando o offset de azimute dela é zero. Verificar que ajustes não nulos previamente salvos na NVS não afetam o azimute nem a distância exportados pelo laboratório. Quaternion e ângulos pertencem ao mesmo relatório; o CSV preserva w,x,y,z e precisão suficiente para recomputar os ângulos. Qualidade baixa permanece visível, `accuracy_rad` mantém a parte fracionária. Singularidade angular preserva o quaternion válido e sinaliza `angles_valid=0`. Testar checksum, frame fragmentado, falta de sensor, reset, cache antigo e resposta tardia; não há espera ilimitada.
 
 ### Incremento 4: protocolo e lote limitado
 
@@ -344,6 +370,17 @@ Executar piloto com poses conhecidas, inicialmente cinco repetições por pose, 
 
 **Aceite:** arquivo reproduzível com leituras individuais, qualidade, horários do PC, pose real, resultado e critérios de exclusão. Calcular viés e dispersão separadamente; validar média circular em 359°/1° e singularidades. Confirmar que a duração variável do laser não altera a pose durante o lote. Não exigir ensaios de NTP, deriva de cristal ou sincronização fina do ESP para aprovar esta versão.
 
+### Incremento 7: comandos TCP de calibração, após integração com o manipulador
+
+Acrescentar uma interface de calibração no servidor TCP e no cliente Python somente após a integração do incremento 5 e o piloto do incremento 6. O objetivo será controlar explicitamente o trim da distância e os recursos nativos de calibração do BNO086, preservando as leituras originais para comparar resultados antes/depois. Definir a sintaxe e revisar a versão do protocolo/schema nessa etapa; os nomes de comandos ainda não estão fixados.
+
+- **Trim do laser:** consultar, definir e zerar o offset em milímetros, com valor finito e limites explícitos (inicialmente ±300 mm, como na aplicação). Separar alteração em RAM de gravação persistente e informar o valor efetivo. Manter `distance_m` como leitura original; acrescentar `distance_corrected_m` e registrar `laser_trim_mm`. Documentar a fórmula e tratar resultado corrigido fisicamente inválido com sinalização explícita, sem ocultar falha com um zero aparentemente válido. Esse ajuste é feito no host P4 sobre a distância recebida; não envia automaticamente um comando de calibração ao módulo laser.
+- **Calibração nativa da IMU:** mapear as operações SH-2 suportadas pelo BNO086 e pela biblioteca local. A API já declara `sh2_getCalConfig()`, `sh2_setCalConfig()` e `sh2_saveDcdNow()` para consultar/configurar calibração dinâmica e salvar os dados DCD. Validar no sensor as operações de acompanhamento/conclusão disponíveis, seu significado, retornos e prazos; não presumir que a presença de uma função na biblioteca prove suporte em toda revisão de firmware. Registrar a configuração por sensor, o resultado dos comandos e os indicadores de qualidade. Isso não é o `Heading trim` da UI.
+- **Referência de orientação:** manter Rotation Vector, azimute magnético sem offset e quaternion como recebido. Não executar tare, reorientação ou `Head=0` como parte implícita da calibração. Preservar a transformação medida para a base do robô nos dados de referência; registrar quando uma nova calibração exigir reavaliar esse alinhamento.
+- **Operação e rastreabilidade:** aceitar alterações de calibração somente sem captura ativa; informar `BUSY` durante um lote e impedir iniciar aquisição enquanto uma operação de calibração estiver em andamento. Manter `STATUS` e o atendimento do sensor/rede disponíveis, usar timeouts e retornar erros explícitos. Não recalibrar, gravar DCD ou persistir trim automaticamente a cada pose. Registrar no PC os comandos, parâmetros antes/depois e horários; invalidar caches após operações que reiniciem o sensor. A calibração pode exigir movimentos orientados pelo procedimento do fabricante: os comandos, sozinhos, não substituem esses movimentos.
+
+**Aceite:** controlar trim pelo cliente Docker e conferir sinais/unidades, limites, consulta, persistência solicitada e leitura original preservada. Comparar a distância corrigida com a fórmula documentada. Exercitar a interface SH-2 no hardware, registrar qualidade antes/depois e verificar a persistência explicitamente solicitada. Testar comandos inválidos, falta de sensor, timeout, conflito com captura e reset. Nenhuma dessas operações deve introduzir declinação magnética, offset de heading ou mudanças não registradas de referencial. Nenhuma alteração é exigida nos incrementos 3–6 para antecipar esses comandos.
+
 ## 8. Pontos a confirmar na implementação
 
 - Modelo/protocolo do laser, erros, tempos mínimos, desligamento e garantia de novidade em fallback/recuperação.
@@ -356,6 +393,7 @@ Executar piloto com poses conhecidas, inicialmente cinco repetições por pose, 
 
 - [Aplicação atual](../src/main.cpp): sensores, polling, laser, `imu_update_angles_from_quat` e `refresh_sensor_display`.
 - [Driver P4 da IMU](../src/board/p4/p4_imu.cpp) e [interface](../src/board/p4/p4_imu.h): HAL, callback, relatórios e caches.
+- [Geometria e trim do laser](../include/mm1_geometry.h): correção linear da distância usada pela aplicação original.
 - [Tipos SH-2](../src/board/p4/bno08x/sh2_SensorValue.h), [decoder](../src/board/p4/bno08x/sh2_SensorValue.c) e [API](../src/board/p4/bno08x/sh2.h).
 - [Rádio](../src/sap6_ble.cpp): `hostedSetPins` e inicialização Hosted; [inicialização de placa a excluir](../src/board/p4/p4_board.cpp).
 - [Datasheet BNO08x](datasheets/BNO080_085-Datasheet_v1.16.pdf), [calibração](datasheets/BNO08X-Sesnor-Calibration-Procedure.pdf) e [esquema da placa](datasheets/ESP32-P4-WIFI6-Touch-LCD-4.3-schematic.pdf).
