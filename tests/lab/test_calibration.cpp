@@ -2,8 +2,8 @@
 #include <Arduino.h>
 #include "lab/calibration_service.h"
 #include "board/p4/p4_imu.h"
-#include "board/p4/bno08x/sh2.h"
-#include "board/p4/bno08x/sh2_err.h"
+#include "board/p4/SparkFun_BNO08x_Arduino_Library-1.0.6/src/sh2.h"
+#include "board/p4/SparkFun_BNO08x_Arduino_Library-1.0.6/src/sh2_err.h"
 #include <cassert>
 #include <iostream>
 #include <map>

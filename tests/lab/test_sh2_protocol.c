@@ -1,8 +1,8 @@
 // Real SH-2 + SHTP stack. Only the HAL and device packets are simulated.
-#include "board/p4/bno08x/sh2.h"
-#include "board/p4/bno08x/sh2_err.h"
-#include "board/p4/bno08x/sh2_lab.h"
-#include "board/p4/bno08x/shtp.h"
+#include "board/p4/SparkFun_BNO08x_Arduino_Library-1.0.6/src/sh2.h"
+#include "board/p4/SparkFun_BNO08x_Arduino_Library-1.0.6/src/sh2_err.h"
+#include "board/p4/imu_sparkfun/sh2_lab.h"
+#include "board/p4/SparkFun_BNO08x_Arduino_Library-1.0.6/src/shtp.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

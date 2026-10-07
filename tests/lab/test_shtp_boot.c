@@ -1,5 +1,5 @@
 // Real SHTP must propagate a failed reset write and release the instance.
-#include "board/p4/bno08x/shtp.c"
+#include "board/p4/SparkFun_BNO08x_Arduino_Library-1.0.6/src/shtp.c"
 #include <assert.h>
 #include <stdio.h>
 static int open_rc = -1;

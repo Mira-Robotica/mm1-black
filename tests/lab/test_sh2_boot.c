@@ -1,5 +1,5 @@
 // Real SH-2 open, simulated ordering of reset and channel advertisements.
-#include "board/p4/bno08x/sh2.c"
+#include "board/p4/SparkFun_BNO08x_Arduino_Library-1.0.6/src/sh2.c"
 #include <assert.h>
 #include <stdio.h>
 static uint32_t clock_us, reset_at, advert_at;
@@ -24,16 +24,16 @@ void shtp_service(void *p) {
 int main(void) {
     sh2_Hal_t hal = {0}; hal.getTimeUs = time_us;
     // Reset alone is not readiness: Product ID would use the invalid channel 0xff.
-    clock_us=0; reset_at=100000; advert_at=350000;
+    clock_us=0; reset_at=100000; advert_at=150000;
     assert(sh2_open(&hal,NULL,NULL) == SH2_OK);
     assert(clock_us >= advert_at && _sh2.controlChan == 2 && _sh2.advertDone);
     sh2_close();
-    clock_us=0; reset_at=400000; advert_at=50000;
+    clock_us=0; reset_at=150000; advert_at=50000;
     assert(sh2_open(&hal,NULL,NULL) == SH2_OK && clock_us >= reset_at); sh2_close();
     clock_us=0; reset_at=100000; advert_at=UINT32_MAX;
-    assert(sh2_open(&hal,NULL,NULL) == SH2_ERR_TIMEOUT && clock_us <= 2001000); sh2_close();
+    assert(sh2_open(&hal,NULL,NULL) == SH2_ERR_TIMEOUT && clock_us <= 201000); sh2_close();
     clock_us=0; reset_at=UINT32_MAX; advert_at=50000;
-    assert(sh2_open(&hal,NULL,NULL) == SH2_ERR_TIMEOUT && clock_us <= 2001000); sh2_close();
+    assert(sh2_open(&hal,NULL,NULL) == SH2_ERR_TIMEOUT && clock_us <= 201000); sh2_close();
     transport_available=false;
     assert(sh2_open(&hal,NULL,NULL) != SH2_OK);
     const unsigned before=closes; sh2_close(); assert(closes == before);
