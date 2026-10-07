@@ -3,6 +3,7 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+.vscode/extensions.json
 
 # MM1 firmware — GitHub Releases + Actions artifacts only (never commit)
 /MM1-BLACK-denky32-*.bin
