@@ -1,6 +1,8 @@
 # Incremento 4: calibração manual da IMU por Wi-Fi
 
-Implementado em 01/10/2026 no alvo `mm1_p4_lab`. Build P4, testes nativos e cliente TCP verificados em software. **O procedimento na placa, a carga dos relatórios no I²C e a persistência após desligar/ligar ainda precisam de ensaio físico.** A ligação do lab continua SDA31/SCL30.
+Atualização de 07/10/2026: o incremento 5 substitui o transporte do laboratório por SparkFun 1.0.6/I²C1 e controla NRST no GPIO32. O protocolo de calibração permanece. Com esta versão, o usuário relatou testes promissores: a IMU respondeu bem, foi possível calibrar o magnetômetro e o índice de qualidade do Rotation Vector aumentou para **3/3**. Nem tudo funcionou 100%; as falhas remanescentes ainda precisam ser caracterizadas. Ver [LAB_IMU_SPARKFUN_P4.md](LAB_IMU_SPARKFUN_P4.md).
+
+Implementado em 01/10/2026 no alvo `mm1_p4_lab`. Build P4, testes nativos e cliente TCP verificados em software. **Há sucesso parcial de calibração na placa, informado pelo usuário em 07/10/2026. O aceite completo do procedimento, a estabilidade sob carga de relatórios e a persistência após desligar/ligar permanecem pendentes.** O relato não confirma SAVE/restauração nem persistência DCD, e qualidade 3/3 não substitui uma medição de precisão angular. A ligação do lab continua SDA31/SCL30.
 
 O guia segue as seis etapas do [BNO08X Sensor Calibration Procedure, revisão 1.6](datasheets/BNO08X-Sesnor-Calibration-Procedure.pdf), seções 2.1, 2.2 e 3. A calibração ocorre no BNO, com salvamento explícito do DCD na flash dele. O lab não usa NVS de heading, offsets, declinação, tare ou trim do laser. O laser fica desligado durante a sessão; o CSV de captura continua usando o Rotation Vector magnético, na mesma ordem w,x,y,z e com as mesmas colunas.
 

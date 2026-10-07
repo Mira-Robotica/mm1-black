@@ -2,7 +2,9 @@
 
 Guia da captura, preservado após o incremento 4. Para calibração nativa da IMU, veja [LAB_CALIBRACAO_IMU_P4.md](LAB_CALIBRACAO_IMU_P4.md).
 
-O alvo `mm1_p4_lab` oferece `STATUS` e `CAPTURE <request_id> [1]` por TCP e pela serial. Cada pedido avalia uma transação do laser e, em seguida, um relatório novo da IMU, inclusive quando o laser falha. O dispositivo deve permanecer parado até o término. Lotes com `n>1` pertencem ao incremento 5.
+O alvo `mm1_p4_lab` oferece `STATUS` e `CAPTURE <request_id> [1]` por TCP e pela serial. Cada pedido avalia uma transação do laser e, em seguida, um relatório novo da IMU, inclusive quando o laser falha. O dispositivo deve permanecer parado até o término. Lotes com `n>1` pertencem ao incremento 6.
+
+Desde o incremento 5, o lab usa SparkFun 1.0.6, I²C1 de hardware e NRST no GPIO32. Ver [integração, temporizações e reset remoto](LAB_IMU_SPARKFUN_P4.md); os resultados de captura abaixo são históricos. Com a versão atual, o usuário relatou boa resposta da IMU, calibração do magnetômetro e qualidade do Rotation Vector em **3/3**. Os testes foram promissores, mas ainda houve falhas não detalhadas; o aceite completo permanece pendente.
 
 ## Preparar e executar
 
@@ -13,7 +15,7 @@ Pinagem da montagem de laboratório, confirmada pelo usuário:
 | Sensor | Conexão no P4 |
 | --- | --- |
 | Laser | UART1, 9600 8N1; TX do módulo → GPIO21, RX do módulo → GPIO22 |
-| BNO086 | **SDA GPIO31, SCL GPIO30**; endereço 0x4B, com tentativa de 0x4A |
+| BNO086 | **SDA GPIO31, SCL GPIO30**, I²C1 a 100 kHz; NRST GPIO32; endereço 0x4B, com tentativa de 0x4A |
 
 Os GPIO7/8 continuam reservados aos periféricos da placa. Não há varredura ou inversão automática dos pinos da IMU no alvo lab. Display, touch, áudio, SD, BLE e a UI original permanecem fora desse alvo.
 
@@ -116,7 +118,7 @@ Nota de transcrição: a última linha foi colada com `code=NONEstate=IDLE`, sem
 
 O resultado confirma a aquisição unitária na placa com os dois sensores: `laser=READY`, `imu=READY`, distância de `1.40500009 m`, quaternion e três ângulos exportados, `laser_valid=1`, `imu_valid=1`, `angles_valid=1` e término informado como `COMPLETE/OK`, com um par válido. O azimute continua magnético sem offset e a distância sem trim.
 
-**Qualidade/calibração pendente por decisão do usuário:** a amostra preservou `accuracy_rad=3.14160156` e `imu_status=0`. O status indica orientação não confiável; `imu_valid=1` e `result=OK` confirmam os critérios de aquisição/estrutura do relatório, não boa calibração nem precisão angular comprovada. A suspeita de calibração inadequada foi registrada, mas sua causa não foi diagnosticada neste teste. Esse registro é histórico. A calibração nativa foi antecipada e implementada no incremento 4, com ensaio físico ainda pendente; veja o guia dedicado.
+**Qualidade/calibração pendente por decisão do usuário:** a amostra preservou `accuracy_rad=3.14160156` e `imu_status=0`. O status indica orientação não confiável; `imu_valid=1` e `result=OK` confirmam os critérios de aquisição/estrutura do relatório, não boa calibração nem precisão angular comprovada. A suspeita de calibração inadequada foi registrada, mas sua causa não foi diagnosticada neste teste. Esse registro é histórico. A calibração nativa foi antecipada e implementada no incremento 4, com sucesso parcial de bancada relatado após o incremento 5: magnetômetro calibrado e Rotation Vector em 3/3. O aceite completo e a persistência DCD continuam pendentes; veja o guia dedicado.
 
 O `STATUS` anterior ao pedido registrou 19.295 relatórios, 1 reset, 1 erro I²C, 2 erros de decodificação e 1.296 descontinuidades de sequência. São contadores acumulados, não erros atribuídos à amostra apresentada. Foram preservados para investigação posterior; o teste não determina suas causas nem permite converter as descontinuidades diretamente em número de amostras perdidas.
 

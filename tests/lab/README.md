@@ -1,4 +1,4 @@
-# Testes nativos dos incrementos 3 e 4
+# Testes nativos dos incrementos 3, 4 e 5
 
 Compilam as implementações reais de orientação, parser, polling UART, aquisição e CSV com relógio/UART/IMU simulados. Também compilam o driver real da IMU com GPIO e SH-2 simulados, nos modos lab e original. Não acessam a placa nem leem as credenciais locais: `stubs/lab_config.h` isola os parâmetros do ensaio. Com GCC C++17 e os sanitizers, a partir da raiz:
 
@@ -27,3 +27,12 @@ Em 02/10/2026, `test_sh2_boot.c` passou a testar a abertura SH-2 real com reset/
 `test_sh2_protocol.c` integra SH-2 e SHTP reais com uma HAL simulada: verifica o pacote F9, as quatro respostas F8, GET_CAL/F1 e relatórios RV/Game RV/magnético. Reproduz o timeout causado pela ausência de comprimentos no anúncio, cobre tabelas completas/parciais/ausentes, respostas insuficientes e truncadas, além dos contadores de diagnóstico. Este teste não usa os stubs de SHTP dos testes unitários anteriores.
 
 O caso real `read_rc=-6`, seguido de `rc=0` na limpeza, agora tem regressão no teste de sessão: o erro original e seu diagnóstico permanecem, a máscara fica intacta e nenhum SET/SAVE é enviado. Os testes SH-2 verificam contagem de respostas, rejeição por comando/sequência e limpeza dos contadores ao iniciar a operação seguinte.
+
+
+## Migração SparkFun (07/10/2026)
+
+Os testes SH-2/SHTP agora compilam os fontes da SparkFun 1.0.6, com a extensão cooperativa do projeto. O boot verifica os 200 ms originais; Product ID mantém limite de 2 s. O teste do driver antigo fica apenas na configuração de produção.
+
+`test_sparkfun_driver.cpp` integra a implementação real do wrapper Arduino SparkFun, adaptador P4, SH-2, SHTP e decoder com Wire/GPIO/tempo simulados. Exercita I²C1 SDA31/SCL30, reset GPIO32, ausência de soft reset duplicado, endereço alternativo, todos os callbacks de um pacote com múltiplos relatórios, leitura vazia versus falha, qualidade/sequência, transferência máxima, timeout e recuperação. Um reset durante SAVE invalida o cache, aborta a operação e não repete a gravação. Os testes não validam clock stretching elétrico nem os tempos reais do módulo.
+
+A revisão `mm1.2` também verifica prontidão tardia (ACK após 240 ms), encerramento da janela de 500 ms com sensor ausente, diagnóstico distinto de NACK/erro/timeout e níveis do reset. A simulação não estabelece a causa do `NO_ACK` observado na placa.
