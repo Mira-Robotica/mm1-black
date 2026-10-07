@@ -41,6 +41,10 @@
 */
 
 #include "SparkFun_BNO08x_Arduino_Library.h"
+#if defined(MM1_LAB)
+#include "../../imu_sparkfun/config.h"
+#include "../../imu_sparkfun/hooks.h"
+#endif
 
 int8_t _int_pin = -1, _reset_pin = -1;
 static TwoWire *_i2cPort = NULL;		//The generic connection to user's chosen I2C hardware
@@ -82,7 +86,11 @@ static bool spi_write(const uint8_t *buffer, size_t len,
 			const uint8_t *prefix_buffer = nullptr, size_t prefix_len = 0);
 			
 
+#if defined(MM1_LAB)
+size_t _maxBufferSize = MM1_LAB_IMU_I2C_BUFFER;
+#else
 size_t _maxBufferSize = 32;
+#endif
 size_t maxBufferSize();		
 
 //Initializes the sensor with basic settings using I2C
@@ -1083,6 +1091,9 @@ bool BNO08x::_init(int32_t sensor_id) {
 
   // Open SH2 interface (also registers non-sensor event handler.)
   status = sh2_open(&_HAL, hal_callback, NULL);
+#if defined(MM1_LAB)
+  p4_sparkfun_stage("SH2_OPEN", status);
+#endif
   if (status != SH2_OK) {
     return false;
   }
@@ -1090,6 +1101,9 @@ bool BNO08x::_init(int32_t sensor_id) {
   // Check connection partially by getting the product id's
   memset(&prodIds, 0, sizeof(prodIds));
   status = sh2_getProdIds(&prodIds);
+#if defined(MM1_LAB)
+  p4_sparkfun_stage("PRODUCT_IDS", status);
+#endif
   if (status != SH2_OK) {
     return false;
   }
@@ -1180,6 +1194,10 @@ bool BNO08x::enableReport(sh2_SensorId_t sensorId, uint32_t interval_us,
 *****************************************/
 
 static int i2chal_open(sh2_Hal_t *self) {
+#if defined(MM1_LAB)
+  // The board adapter already pulsed NRST and waited for boot, before probing.
+  return 0;
+#else
   // Serial.println("I2C HAL open");
 
   if(_int_pin != -1) hal_wait_for_int();
@@ -1197,6 +1215,7 @@ static int i2chal_open(sh2_Hal_t *self) {
     return -1;
   delay(300);
   return 0;
+#endif
 }
 
 static void i2chal_close(sh2_Hal_t *self) {
@@ -1215,8 +1234,12 @@ static int i2chal_read(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len,
   	}
   }
 
+  if (t_us) *t_us = hal_getTimeUs(self);
   uint8_t header[4];
   if (!i2c_read(header, 4)) {
+#if defined(MM1_LAB)
+    p4_sparkfun_io_error();
+#endif
     return 0;
   }
 
@@ -1235,6 +1258,16 @@ static int i2chal_read(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len,
 
   size_t i2c_buffer_max = maxBufferSize();
 
+#if defined(MM1_LAB)
+  if (packet_size == 0) {
+    p4_sparkfun_empty_read();
+    return 0;
+  }
+  if (packet_size < 4 || packet_size > len) {
+    p4_sparkfun_io_error();
+    return 0;
+  }
+#endif
   if (packet_size > len) {
     // packet wouldn't fit in our buffer
     return 0;
@@ -1263,6 +1296,9 @@ static int i2chal_read(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len,
 	}
 
     if (!i2c_read(i2c_buffer, read_size)) {
+#if defined(MM1_LAB)
+      p4_sparkfun_io_error();
+#endif
       return 0;
     }
 
@@ -1307,6 +1343,12 @@ static int i2chal_write(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len) {
   Serial.println(i2c_buffer_max);
   */
 
+#if defined(MM1_LAB)
+  if (len > i2c_buffer_max) {
+    p4_sparkfun_io_error();
+    return SH2_ERR_IO; // Never report a truncated write as success.
+  }
+#endif
   uint16_t write_size = min(i2c_buffer_max, len);
 
   if(_int_pin != -1) {
@@ -1316,6 +1358,10 @@ static int i2chal_write(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len) {
   }
 
   if (!i2c_write(pBuffer, write_size)) {
+#if defined(MM1_LAB)
+    p4_sparkfun_io_error();
+    return SH2_ERR_IO; // Zero means retry forever in SHTP, not an I/O failure.
+#endif
     return 0;
   }
 
@@ -1352,6 +1398,9 @@ static void hal_callback(void *cookie, sh2_AsyncEvent_t *pEvent) {
   if (pEvent->eventId == SH2_RESET) {
     // Serial.println("Reset!");
     _reset_occurred = true;
+#if defined(MM1_LAB)
+    p4_sparkfun_reset();
+#endif
   }
 }
 
@@ -1386,10 +1435,15 @@ uint8_t BNO08x::getSensorEventID()
 //Returns true if I2C device ack's
 boolean BNO08x::isConnected()
 {
-  	_i2cPort->beginTransmission((uint8_t)_deviceAddress);
-  	if (_i2cPort->endTransmission() != 0)
-    	return (false); //Sensor did not ACK
-  	return (true);
+    _i2cPort->beginTransmission((uint8_t)_deviceAddress);
+    const uint8_t rc = _i2cPort->endTransmission();
+#if defined(MM1_LAB)
+    p4_sparkfun_probe_result(_deviceAddress, rc);
+#endif
+    if (rc != 0) {
+        return false; // Sensor did not ACK.
+    }
+    return true;
 }
 
 /****************************************
@@ -1544,6 +1598,16 @@ static int spihal_read(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len,
   Serial.println(len);
   */
 
+#if defined(MM1_LAB)
+  if (packet_size == 0) {
+    p4_sparkfun_empty_read();
+    return 0;
+  }
+  if (packet_size < 4 || packet_size > len) {
+    p4_sparkfun_io_error();
+    return 0;
+  }
+#endif
   if (packet_size > len) {
     return 0;
   }

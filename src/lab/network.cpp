@@ -99,12 +99,16 @@ void format_status(char *out, size_t size)
     const bool online = state == State::Connected;
     const String ip = online ? WiFi.localIP().toString() : String("0.0.0.0");
     const auto imu = p4_imu_diagnostics();
+    const auto product = p4_imu_lab_info();
     snprintf(out, size,
              "# OK STATUS stage=unit_capture wifi=%s ip=%s rssi_dbm=%ld "
              "tcp=%s port=%u hosted=%u sensors=ENABLED "
              "attempt=%lu disconnect_reason=%u uptime_ms=%lu state=%s laser=%s imu=%s "
              "imu_reports=%lu imu_resets=%lu imu_io_errors=%lu imu_decode_errors=%lu imu_sequence_gaps=%lu n_max=1 calibration=%s calibration_blocked=%u "
-             "imu_init=%s imu_init_rc=%d imu_addr=0x%02X imu_sda=%u imu_scl=%u\n",
+             "imu_init=%s imu_init_rc=%d imu_addr=0x%02X " MM1_LAB_IMU_META
+             "imu_hw_resets=%lu imu_init_ms=%lu imu_part=%lu imu_fw=%u.%u.%u imu_build=%lu "
+             "imu_probe_4b_rc=%d imu_probe_4a_rc=%d imu_probe_attempts=%lu imu_probe_ms=%lu "
+             "imu_probe_sda=%d imu_probe_scl=%d imu_rst_low=%d imu_rst_high=%d\n",
              state_name(), ip.c_str(), online ? static_cast<long>(WiFi.RSSI()) : 0L,
              server_started ? "LISTENING" : "OFF", static_cast<unsigned>(LAB_TCP_PORT),
              static_cast<unsigned>(hostedIsInitialized()),
@@ -114,7 +118,12 @@ void format_status(char *out, size_t size)
              (unsigned long)imu.resets, (unsigned long)imu.io_errors,
              (unsigned long)imu.decode_errors, (unsigned long)imu.sequence_gaps,
              lab::calibration_state(), (unsigned)lab::calibration_blocks_capture(),
-             imu.init_stage, imu.init_rc, imu.address, imu.sda, imu.scl);
+             imu.init_stage, imu.init_rc, imu.address,
+             (unsigned long)imu.hardware_resets, (unsigned long)imu.init_ms,
+             (unsigned long)product.part, product.major, product.minor, product.patch,
+             (unsigned long)product.build, imu.probe_4b_rc, imu.probe_4a_rc,
+             (unsigned long)imu.probe_attempts, (unsigned long)imu.probe_elapsed_ms,
+             imu.probe_sda, imu.probe_scl, imu.rst_low, imu.rst_high);
 }
 
 void command(const char *line, bool from_serial)
@@ -122,6 +131,13 @@ void command(const char *line, bool from_serial)
     char reply[sizeof(tx)];
     if (strcmp(line, "STATUS") == 0) {
         format_status(reply, sizeof(reply));
+    } else if (strcmp(line, "IMU_RESET") == 0) {
+        if (lab::capture_busy() || lab::calibration_busy()) {
+            snprintf(reply, sizeof(reply), "# ERR BUSY\n");
+        } else {
+            p4_imu_request_reset();
+            snprintf(reply, sizeof(reply), "# OK IMU_RESET state=SCHEDULED\n");
+        }
     } else if (strcmp(line, "CAL_IMU") == 0 || strncmp(line, "CAL_IMU ", 8) == 0) {
         lab::calibration_command(line, from_serial ? lab::CalOwner::Serial : lab::CalOwner::Tcp, reply, sizeof(reply));
     } else if (strcmp(line, "CAPTURE") == 0 || strncmp(line, "CAPTURE ", 8) == 0) {
@@ -142,7 +158,7 @@ void command(const char *line, bool from_serial)
                      (unsigned long)id);
         } else snprintf(reply, sizeof(reply), "# ERR BUSY\n");
     } else {
-        snprintf(reply, sizeof(reply), "# ERR BAD_COMMAND supported=STATUS,CAPTURE,CAL_IMU\n");
+        snprintf(reply, sizeof(reply), "# ERR BAD_COMMAND supported=STATUS,CAPTURE,CAL_IMU,IMU_RESET\n");
     }
     if (from_serial) {
         Serial.print(reply);
@@ -184,8 +200,9 @@ void service_tcp()
             char hello[1024];
             snprintf(hello, sizeof(hello),
                      "# HELLO MM1LAB 2 stage=unit_capture boot_id=%s connection_id=%lu\n"
-                     "# META capture=single commands=STATUS,CAPTURE,CAL_IMU cal_schema=1 cal_line_max=2048 schema=2 n_max=1 timeout_ms=9000 "
+                     "# META capture=single commands=STATUS,CAPTURE,CAL_IMU,IMU_RESET cal_schema=1 cal_line_max=2048 schema=2 n_max=1 timeout_ms=9000 "
                      "imu_report=rotation_vector imu_interval_us=20000 quaternion_order=wxyz "
+                     MM1_LAB_IMU_META
                      "laser_axis=%.9g/%.9g/%.9g azimuth_reference=magnetic azimuth_offset_deg=0 "
                      "distance_source=laser_report laser_trim_mm=0 quaternion_norm_tolerance=0.02 "
                      "singularity_epsilon=1e-5 csv_header=per_capture\n",

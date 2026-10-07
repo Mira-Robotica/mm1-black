@@ -328,6 +328,10 @@ static sh2_AsyncEvent_t sh2AsyncEvent;
 // ------------------------------------------------------------------------
 // Private functions
 
+#if defined(MM1_LAB)
+#include "../../imu_sparkfun/sh2_state.inc"
+#endif
+
 // SH-2 transaction phases
 static int opStart(sh2_t *pSh2, const sh2_Op_t *pOp)
 {
@@ -348,7 +352,10 @@ static int opStart(sh2_t *pSh2, const sh2_Op_t *pOp)
 }
 
 static void opRx(sh2_t *pSh2, const uint8_t *payload, uint16_t len)
-{ 
+{
+#if defined(MM1_LAB)
+    labExpire(pSh2); // A late reply, including one read across the deadline, cannot succeed.
+#endif
     if ((pSh2->pOp != 0) &&                      // An operation is in progress
         (pSh2->pOp->rx != 0)) {                  // and it has an rx method
         pSh2->pOp->rx(pSh2, payload, len);  // Call receive method
@@ -395,6 +402,8 @@ static void sensorhubAdvertHdlr(void *cookie, uint8_t tag, uint8_t len, uint8_t 
     }
 }
 
+static uint8_t getReportLen(sh2_t *pSh2, uint8_t reportId);
+
 static void sensorhubControlHdlr(void *cookie, uint8_t *payload, uint16_t len, uint32_t timestamp)
 {
     sh2_t *pSh2 = (sh2_t *)cookie;
@@ -402,7 +411,9 @@ static void sensorhubControlHdlr(void *cookie, uint8_t *payload, uint16_t len, u
     uint16_t cursor = 0;
     uint32_t count = 0;
     CommandResp_t * pResp = 0;
-    
+#if defined(MM1_LAB)
+    ++labBoot.control_packets;
+#endif
     if (len == 0) {
         pSh2->emptyPayloads++;
         return;
@@ -414,13 +425,14 @@ static void sensorhubControlHdlr(void *cookie, uint8_t *payload, uint16_t len, u
         uint8_t reportId = payload[cursor];
 
         // Determine report length
-        uint8_t reportLen = 0;
-        for (int n = 0; n < SH2_MAX_REPORT_IDS; n++) {
-            if (pSh2->report[n].id == reportId) {
-                reportLen = pSh2->report[n].len;
-                break;
-            }
+        uint8_t reportLen = getReportLen(pSh2, reportId);
+#if defined(MM1_LAB)
+        labBoot.last_report = reportId;
+        if (reportLen > len - cursor) {
+            ++labBoot.truncated_reports;
+            return;
         }
+#endif
         if (reportLen == 0) {
             // An unrecognized report id
             pSh2->unknownReportIds++;
@@ -488,11 +500,12 @@ static int opProcess(sh2_t *pSh2, const sh2_Op_t *pOp)
     }
 
     uint32_t now_us = start_us;
-    
+    const uint32_t timeout_us = pOp->timeout_us;
+
     // While op not complete and not timed out.
     while ((pSh2->pOp != 0) &&
-           ((pOp->timeout_us == 0) ||
-            ((now_us-start_us) < pOp->timeout_us))) {
+           ((timeout_us == 0) ||
+            ((now_us-start_us) < timeout_us))) {
         // Service SHTP to poll the device.
         shtp_service(pSh2->pShtp);
 
@@ -511,6 +524,25 @@ static int opProcess(sh2_t *pSh2, const sh2_Op_t *pOp)
 
 static uint8_t getReportLen(sh2_t *pSh2, uint8_t reportId)
 {
+#if defined(MM1_LAB)
+    // Protocol-defined sizes for the reports consumed by lab boot/calibration.
+    // CEVA's current SH-2 library also uses fixed sizes (sh2ReportLens):
+    // https://github.com/ceva-dsp/sh2/blob/main/sh2.c
+    // An app/channel advertisement does not imply a complete length table.
+    switch (reportId) {
+    case SENSORHUB_PROD_ID_RESP: return sizeof(ProdIdResp_t);
+    case SENSORHUB_COMMAND_RESP: return sizeof(CommandResp_t);
+    case SENSORHUB_GET_FEATURE_RESP: return sizeof(GetFeatureResp_t);
+    case SENSORHUB_BASE_TIMESTAMP_REF: return sizeof(BaseTimestampRef_t);
+    case SENSORHUB_TIMESTAMP_REBASE: return sizeof(TimestampRebase_t);
+    case SENSORHUB_FLUSH_COMPLETED: return sizeof(ForceFlushResp_t);
+    case SH2_ACCELEROMETER:
+    case SH2_MAGNETIC_FIELD_CALIBRATED: return 10;
+    case SH2_ROTATION_VECTOR: return 14;
+    case SH2_GAME_ROTATION_VECTOR: return 12;
+    default: break;
+    }
+#endif
     for (int n = 0; n < SH2_MAX_REPORT_IDS; n++) {
         if (pSh2->report[n].id == reportId) {
             return pSh2->report[n].len;
@@ -554,6 +586,12 @@ static void sensorhubInputHdlr(sh2_t *pSh2, uint8_t *payload, uint16_t len, uint
 
         // Determine report length
         uint8_t reportLen = getReportLen(pSh2, reportId);
+#if defined(MM1_LAB)
+        if (reportLen > len - cursor || reportLen > sizeof(event.report)) {
+            ++labBoot.truncated_reports;
+            return;
+        }
+#endif
         if (reportLen == 0) {
             // An unrecognized report id
             pSh2->unknownReportIds++;
@@ -687,6 +725,10 @@ static int getProdIdStart(sh2_t *pSh2)
     ProdIdReq_t req;
     
     pSh2->opData.getProdIds.nextEntry = 0;
+#if defined(MM1_LAB)
+    labBoot.product_received = 0;
+    labBoot.product_expected = 4;
+#endif
     pSh2->opData.getProdIds.expectedEntries = 4;  // Most products supply 4 product ids.
                                                 // When the first arrives, we'll know if
                                                 // we need to adjust this.
@@ -730,6 +772,10 @@ static void getProdIdRx(sh2_t *pSh2, const uint8_t *payload, uint16_t len)
 
 
             pSh2->opData.getProdIds.nextEntry++;
+#if defined(MM1_LAB)
+            labBoot.product_received = pSh2->opData.getProdIds.nextEntry;
+            labBoot.product_expected = pSh2->opData.getProdIds.expectedEntries;
+#endif
         }
     }
 
@@ -745,6 +791,9 @@ static void getProdIdRx(sh2_t *pSh2, const uint8_t *payload, uint16_t len)
 }
 
 const sh2_Op_t getProdIdOp = {
+#if defined(MM1_LAB)
+    .timeout_us = 2000000, // Boot only; calibration uses the cooperative adapter.
+#endif
     .start = getProdIdStart,
     .rx = getProdIdRx,
 };
@@ -1282,6 +1331,16 @@ static int sendCmd2(sh2_t *pSh2, uint8_t cmd, uint8_t p0, uint8_t p1)
 static bool wrongResponse(sh2_t *pSh2, CommandResp_t *resp)
 {
     if (resp->reportId != SENSORHUB_COMMAND_RESP) return true;
+#if defined(MM1_LAB)
+    if (labActive) {
+        ++labCommand.replies;
+        labCommand.last_command = resp->command;
+        labCommand.last_sequence = resp->commandSeq;
+        labCommand.last_status = resp->r[0];
+        if (resp->command == pSh2->lastCmdId && resp->commandSeq == pSh2->cmdSeq)
+            ++labCommand.matched;
+    }
+#endif
     if (resp->command != pSh2->lastCmdId) return true;
     if (resp->commandSeq != pSh2->cmdSeq) return true;
 
@@ -1495,6 +1554,9 @@ static int setCalConfigStart(sh2_t *pSh2)
     p[2] = (pSh2->opData.calConfig.sensors & SH2_CAL_MAG)   ? 1 : 0; // mag cal
     p[4] = (pSh2->opData.calConfig.sensors & SH2_CAL_PLANAR) ? 1 : 0; // planar cal
     
+#if defined(MM1_LAB)
+    p[5] = (pSh2->opData.calConfig.sensors & 0x10) ? 1 : 0; // On-table cal, SH-2 v1.9.
+#endif
     return sendCmd(pSh2, SH2_CMD_ME_CAL, p);
 }
 
@@ -1555,6 +1617,9 @@ static void getCalConfigRx(sh2_t *pSh2, const uint8_t *payload, uint16_t len)
         if (resp->r[2]) sensors |= SH2_CAL_GYRO;
         if (resp->r[3]) sensors |= SH2_CAL_MAG;
         if (resp->r[4]) sensors |= SH2_CAL_PLANAR;
+#if defined(MM1_LAB)
+        if (resp->r[5]) sensors |= 0x10;
+#endif
         *(pSh2->opData.getCalConfig.pSensors) = sensors;
     }
     
@@ -1567,6 +1632,10 @@ const sh2_Op_t getCalConfigOp = {
     .start = getCalConfigStart,
     .rx = getCalConfigRx,
 };
+
+#if defined(MM1_LAB)
+#include "../../imu_sparkfun/sh2_ops.inc"
+#endif
 
 // ------------------------------------------------------------------------
 // Force Flush
@@ -1708,6 +1777,9 @@ int sh2_open(sh2_Hal_t *pHal,
 
     // Clear everything in sh2 structure.
     memset(&_sh2, 0, sizeof(_sh2));
+#if defined(MM1_LAB)
+    memset(&labBoot, 0, sizeof(labBoot));
+#endif
         
     pSh2->resetComplete = false;  // will go true after reset response from SH.
     pSh2->controlChan = 0xFF;  // An invalid value since we don't know yet.
@@ -1745,13 +1817,24 @@ int sh2_open(sh2_Hal_t *pHal,
     // The client can't talk to the sensor hub until that happens.
     uint32_t start_us = pSh2->pHal->getTimeUs(pSh2->pHal);
     uint32_t now_us = start_us;
+#if defined(MM1_LAB)
+    // RESET_COMPLETE and the sensorhub advertisement are separate packets.
+    // A reset notification alone leaves controlChan/report lengths undefined.
+    while (((uint32_t)(now_us - start_us) < ADVERT_TIMEOUT_US) &&
+           (!pSh2->resetComplete || !pSh2->advertDone || pSh2->controlChan == 0xFF))
+#else
     while (((now_us - start_us) < ADVERT_TIMEOUT_US) &&
            (!pSh2->resetComplete))
+#endif
     {
         shtp_service(pSh2->pShtp);
         now_us = pSh2->pHal->getTimeUs(pSh2->pHal);
     }
     
+#if defined(MM1_LAB)
+    if (!pSh2->resetComplete || !pSh2->advertDone || pSh2->controlChan == 0xFF)
+        return SH2_ERR_TIMEOUT;
+#endif
     // No errors.
     return SH2_OK;
 }
@@ -1766,10 +1849,18 @@ void sh2_close(void)
 {
     sh2_t *pSh2 = &_sh2;
     
+#if defined(MM1_LAB)
+    sh2_lab_abort();
+    if (pSh2->pShtp) shtp_close(pSh2->pShtp);
+#else
     shtp_close(pSh2->pShtp);
+#endif
 
     // Clear everything in sh2 structure.
     memset(pSh2, 0, sizeof(sh2_t));
+#if defined(MM1_LAB)
+    memset(&labBoot, 0, sizeof(labBoot));
+#endif
 }
 
 /**
@@ -1780,6 +1871,9 @@ void sh2_close(void)
 void sh2_service(void)
 {
     sh2_t *pSh2 = &_sh2;
+#if defined(MM1_LAB)
+    labExpire(pSh2);
+#endif
     
     shtp_service(pSh2->pShtp);
 }

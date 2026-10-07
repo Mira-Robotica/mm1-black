@@ -1,8 +1,8 @@
 #include "calibration_service.h"
 #include "capture_service.h"
 #include "settings.h"
-#include "board/p4/bno08x/sh2.h"
-#include "board/p4/bno08x/sh2_err.h"
+#include "board/p4/SparkFun_BNO08x_Arduino_Library-1.0.6/src/sh2.h"
+#include "board/p4/SparkFun_BNO08x_Arduino_Library-1.0.6/src/sh2_err.h"
 #include <Arduino.h>
 #include <cstdio>
 #include <cstring>

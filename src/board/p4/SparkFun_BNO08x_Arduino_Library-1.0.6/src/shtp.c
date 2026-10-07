@@ -688,7 +688,11 @@ void *shtp_open(sh2_Hal_t *pHal)
     pShtp->advertPhase = ADVERT_REQUESTED;
 
     // Open HAL
-    pHal->open(pHal);
+    if (pHal->open(pHal) != 0) {
+        pHal->close(pHal);
+        memset(pShtp, 0, sizeof(*pShtp));
+        return 0;
+    }
 
     return pShtp;
 }

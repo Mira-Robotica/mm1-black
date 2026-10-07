@@ -1,6 +1,6 @@
 /**
  * @file p4_imu.h
- * @brief BNO086 SH-2 over software I2C (GPIO30/31). No Wire.
+ * @brief BNO08x API: SparkFun/hardware I2C in lab; legacy software I2C otherwise.
  */
 #pragma once
 
@@ -33,12 +33,20 @@ struct P4ImuDiagnostics {
     const char *init_stage = "NOT_STARTED";
     int init_rc = 0;
     uint8_t address = 0, sda = 0, scl = 0;
+    uint32_t hardware_resets = 0, init_ms = 0;
+    // Current initialization only. -1 means no measurement/probe was made.
+    uint32_t probe_attempts = 0, probe_elapsed_ms = 0;
+    int8_t probe_4b_rc = -1, probe_4a_rc = -1;
+    int8_t probe_sda = -1, probe_scl = -1, rst_low = -1, rst_high = -1;
 };
 bool p4_imu_snapshot(P4ImuSample *sample);
 P4ImuDiagnostics p4_imu_diagnostics();
 
 #if defined(MM1_LAB)
-#include "bno08x/sh2_lab.h"
+#include "imu_sparkfun/sh2_lab.h"
+#include "imu_sparkfun/config.h"
+// Schedule one physical reset/reinitialization; caller must exclude active requests.
+void p4_imu_request_reset();
 struct P4ImuFeedback {
     bool present;
     uint8_t status, sequence;
