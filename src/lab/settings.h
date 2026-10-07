@@ -15,6 +15,18 @@
 #ifndef IMU_LASER_AXIS_BX
 #define IMU_LASER_AXIS_BX 1.0f
 #endif
+#ifndef LAB_CAL_SESSION_TIMEOUT_MS
+#define LAB_CAL_SESSION_TIMEOUT_MS 300000UL
+#endif
+#ifndef LAB_CAL_OP_TIMEOUT_MS
+#define LAB_CAL_OP_TIMEOUT_MS 2000UL
+#endif
+#ifndef LAB_CAL_FRESH_MS
+#define LAB_CAL_FRESH_MS 1000UL
+#endif
+static_assert(LAB_CAL_SESSION_TIMEOUT_MS >= 1000 && LAB_CAL_SESSION_TIMEOUT_MS <= 1800000, "Calibration session: 1..1800 s");
+static_assert(LAB_CAL_OP_TIMEOUT_MS >= 100 && LAB_CAL_OP_TIMEOUT_MS <= 5000, "SH-2 command: 100..5000 ms");
+static_assert(LAB_CAL_FRESH_MS >= 100 && LAB_CAL_FRESH_MS <= 2000, "Feedback freshness: 100..2000 ms");
 #ifndef IMU_LASER_AXIS_BY
 #define IMU_LASER_AXIS_BY 0.0f
 #endif

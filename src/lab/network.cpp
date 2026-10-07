@@ -13,6 +13,7 @@
 #include "line_reader.h"
 #include "settings.h"
 #include "capture_service.h"
+#include "calibration_service.h"
 
 static_assert(LAB_TCP_PORT > 0 && LAB_TCP_PORT <= 65535, "Invalid TCP port");
 static_assert(LAB_WIFI_CONNECT_TIMEOUT_MS > 0 && LAB_WIFI_CONNECT_TIMEOUT_MS < 0x80000000UL,
@@ -62,6 +63,7 @@ const char *state_name()
 
 void close_client()
 {
+    lab::calibration_disconnect(lab::CalOwner::Tcp);
     if (owner == Owner::Tcp) {
         lab::capture_cancel(); owner = Owner::None; result_queued = false;
     }
@@ -101,15 +103,18 @@ void format_status(char *out, size_t size)
              "# OK STATUS stage=unit_capture wifi=%s ip=%s rssi_dbm=%ld "
              "tcp=%s port=%u hosted=%u sensors=ENABLED "
              "attempt=%lu disconnect_reason=%u uptime_ms=%lu state=%s laser=%s imu=%s "
-             "imu_reports=%lu imu_resets=%lu imu_io_errors=%lu imu_decode_errors=%lu imu_sequence_gaps=%lu n_max=1\n",
+             "imu_reports=%lu imu_resets=%lu imu_io_errors=%lu imu_decode_errors=%lu imu_sequence_gaps=%lu n_max=1 calibration=%s calibration_blocked=%u "
+             "imu_init=%s imu_init_rc=%d imu_addr=0x%02X imu_sda=%u imu_scl=%u\n",
              state_name(), ip.c_str(), online ? static_cast<long>(WiFi.RSSI()) : 0L,
              server_started ? "LISTENING" : "OFF", static_cast<unsigned>(LAB_TCP_PORT),
              static_cast<unsigned>(hostedIsInitialized()),
              static_cast<unsigned long>(attempt), disconnect_reason.load(),
-             static_cast<unsigned long>(millis()), lab::capture_state(), lab::laser_state(),
+             static_cast<unsigned long>(millis()), lab::calibration_blocks_capture() ? "CALIBRATING" : lab::capture_state(), lab::laser_state(),
              imu.ready ? "READY" : "NOT_READY", (unsigned long)imu.generation,
              (unsigned long)imu.resets, (unsigned long)imu.io_errors,
-             (unsigned long)imu.decode_errors, (unsigned long)imu.sequence_gaps);
+             (unsigned long)imu.decode_errors, (unsigned long)imu.sequence_gaps,
+             lab::calibration_state(), (unsigned)lab::calibration_blocks_capture(),
+             imu.init_stage, imu.init_rc, imu.address, imu.sda, imu.scl);
 }
 
 void command(const char *line, bool from_serial)
@@ -117,6 +122,8 @@ void command(const char *line, bool from_serial)
     char reply[sizeof(tx)];
     if (strcmp(line, "STATUS") == 0) {
         format_status(reply, sizeof(reply));
+    } else if (strcmp(line, "CAL_IMU") == 0 || strncmp(line, "CAL_IMU ", 8) == 0) {
+        lab::calibration_command(line, from_serial ? lab::CalOwner::Serial : lab::CalOwner::Tcp, reply, sizeof(reply));
     } else if (strcmp(line, "CAPTURE") == 0 || strncmp(line, "CAPTURE ", 8) == 0) {
         uint32_t id = 0, count = 0;
         uint32_t &last = from_serial ? last_serial_id : last_tcp_id;
@@ -124,7 +131,7 @@ void command(const char *line, bool from_serial)
             snprintf(reply, sizeof(reply), "# ERR BAD_CAPTURE expected=CAPTURE_id_[1]\n");
         } else if (count != 1) {
             snprintf(reply, sizeof(reply), "# ERR N_RANGE n_max=1\n");
-        } else if (lab::capture_busy()) {
+        } else if (lab::capture_busy() || lab::calibration_blocks_capture()) {
             snprintf(reply, sizeof(reply), "# ERR BUSY\n");
         } else if (id <= last) {
             snprintf(reply, sizeof(reply), "# ERR DUPLICATE_ID\n");
@@ -135,7 +142,7 @@ void command(const char *line, bool from_serial)
                      (unsigned long)id);
         } else snprintf(reply, sizeof(reply), "# ERR BUSY\n");
     } else {
-        snprintf(reply, sizeof(reply), "# ERR BAD_COMMAND supported=STATUS,CAPTURE\n");
+        snprintf(reply, sizeof(reply), "# ERR BAD_COMMAND supported=STATUS,CAPTURE,CAL_IMU\n");
     }
     if (from_serial) {
         Serial.print(reply);
@@ -177,7 +184,7 @@ void service_tcp()
             char hello[1024];
             snprintf(hello, sizeof(hello),
                      "# HELLO MM1LAB 2 stage=unit_capture boot_id=%s connection_id=%lu\n"
-                     "# META capture=single commands=STATUS,CAPTURE schema=2 n_max=1 timeout_ms=9000 "
+                     "# META capture=single commands=STATUS,CAPTURE,CAL_IMU cal_schema=1 cal_line_max=2048 schema=2 n_max=1 timeout_ms=9000 "
                      "imu_report=rotation_vector imu_interval_us=20000 quaternion_order=wxyz "
                      "laser_axis=%.9g/%.9g/%.9g azimuth_reference=magnetic azimuth_offset_deg=0 "
                      "distance_source=laser_report laser_trim_mm=0 quaternion_norm_tolerance=0.02 "

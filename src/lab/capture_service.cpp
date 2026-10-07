@@ -1,4 +1,5 @@
 #include "capture_service.h"
+#include "calibration_service.h"
 #include "settings.h"
 #include "board/p4/mm1_p4_pins.h"
 #include <Arduino.h>
@@ -19,6 +20,9 @@ void capture_begin()
     const bool ready = p4_imu_begin(MM1_IMU_ADDR);
     Serial.printf("[LAB] IMU=%s RV=50Hz acceleration=OFF magnetic_offset=0 laser_trim=0\n",
                   ready ? "READY" : "NOT_READY");
+    const auto init = p4_imu_diagnostics();
+    Serial.printf("[LAB] IMU init=%s rc=%d addr=0x%02X SDA=%u SCL=%u\n",
+                  init.init_stage, init.init_rc, init.address, init.sda, init.scl);
 }
 bool capture_busy() { return phase != Phase::Idle; }
 bool capture_ready() { return phase == Phase::Ready; }
@@ -27,7 +31,7 @@ const char *capture_state() { return capture_busy() ? "BUSY" : "IDLE"; }
 void capture_cancel() { laser_cancel(); phase = Phase::Idle; }
 bool capture_start(uint32_t id)
 {
-    if (capture_busy()) return false;
+    if (capture_busy() || calibration_blocks_capture()) return false;
     sample = {}; sample.request_id = id;
     started = millis(); phase = Phase::Laser;
     laser_start();

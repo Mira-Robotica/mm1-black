@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+bool calibration_blocked = false;
 P4ImuDiagnostics diag{};
 P4ImuSample snapshot{};
 bool p4_imu_begin(uint8_t) { diag.ready = true; return true; }
@@ -41,6 +42,7 @@ void fresh()
 }
 int main()
 {
+    calibration_blocked = true; assert(!lab::capture_start(1)); calibration_blocked = false;
     // Orientation reference cases: identity, q == -q, Z rotation, singularity, invalid norm.
     auto a=lab::orientation(1,0,0,0,1,0,0);
     assert(a.angles_valid && a.azimuth==90 && a.inclination==0 && a.roll==0);
@@ -126,3 +128,5 @@ int main()
         assert(!lab::parse_capture(cmd,id,count));
     std::cout << "Native acquisition tests passed\n";
 }
+
+namespace lab { bool calibration_blocks_capture() { return calibration_blocked; } }
