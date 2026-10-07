@@ -688,7 +688,16 @@ void *shtp_open(sh2_Hal_t *pHal)
     pShtp->advertPhase = ADVERT_REQUESTED;
 
     // Open HAL
+#if defined(MM1_LAB)
+    if (pHal->open(pHal) != 0) {
+        // Do not return a working transport when the software reset write failed.
+        pHal->close(pHal);
+        memset(pShtp, 0, sizeof(*pShtp));
+        return 0;
+    }
+#else
     pHal->open(pHal);
+#endif
 
     return pShtp;
 }
