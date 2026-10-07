@@ -27,6 +27,19 @@ Exemplo de saída do firmware do incremento 1 (valores ilustrativos):
 
 A execução sem `--capture` termina após o `STATUS`, sem solicitar medição. No incremento 3, as respostas informam `stage=unit_capture`, `capture=single` e `sensors=ENABLED`, além dos diagnósticos de sensores. Feche outros clientes TCP antes do teste: o firmware aceita apenas uma conexão por vez.
 
+## Calibrar a IMU (incremento 4)
+
+```sh
+docker compose -f docker/compose.yaml build calibrate-imu
+docker compose -f docker/compose.yaml run --rm calibrate-imu --host 192.168.0.10
+```
+
+O monitor abre sem iniciar calibração. Digite `iniciar` (seis posições) ou `iniciar 4/5/6`, siga cada movimento e confirme com Enter. A etapa final exige digitar `salvar`; Enter não grava. A consulta de qualidade continua a 5 Hz durante a espera por entrada. `cancelar`, `sair` e Ctrl+C encerram com restauração; uma gravação já enviada precisa ter seu resultado aguardado.
+
+O serviço usa rede host, TTY interativo e o mesmo volume de dados. Logs JSONL com relógio do PC são obrigatórios e recebem nome único em `docker/data`; `--log /data/ensaio.jsonl` ou `LAB_CAL_LOG` permite escolher o arquivo. Use `--positions 4` para mudar o padrão e `--plain` para saída sem ANSI. O cliente mantém uma conexão TCP e não precisa de USB na trena. Captura e calibração são exclusivas.
+
+Veja [o guia completo](../docs/LAB_CALIBRACAO_IMU_P4.md) para preparar o ambiente, usar a serial, interpretar qualidade/DCD, configurar prazos e executar o aceite físico. A implementação e os testes em software não comprovam persistência após desligar/ligar o BNO.
+
 ## Testar uma aquisição (incremento 3)
 
 Após gravar o novo firmware e reconstruir a imagem, mantenha a trena parada e execute:
@@ -90,7 +103,7 @@ Depois de construir a imagem, execute a suíte com servidores TCP simulados em l
 docker compose -f docker/compose.yaml run --rm --entrypoint python status -m unittest discover -s tests -v
 ```
 
-Os 24 testes verificam a troca real por sockets, leitura fragmentada e agrupada, CRLF, EOF, timeouts, limite de linha, mensagens inválidas, códigos de saída e persistência do JSONL, incluindo captura válida, falhas de sensores, singularidades e inconsistências de ACK/CSV/DONE. Não acessam a placa nem o manipulador. O simulador manual abaixo continua servindo somente `STATUS` da etapa `network_only`.
+A suíte atual tem 35 testes, incluindo calibração e exibição de resultados sem repetição. Eles verificam a troca real por sockets, leitura fragmentada e agrupada, CRLF, EOF, timeouts, limite de linha, mensagens inválidas, códigos de saída e persistência do JSONL, incluindo captura válida, falhas de sensores, singularidades e inconsistências de ACK/CSV/DONE. Não acessam a placa nem o manipulador. O simulador manual abaixo continua servindo somente `STATUS` da etapa `network_only`.
 
 Para experimentar manualmente, abra dois terminais. No primeiro:
 

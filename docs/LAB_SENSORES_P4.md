@@ -1,6 +1,8 @@
 # Incremento 3: aquisição unitária pelo Wi-Fi
 
-O alvo `mm1_p4_lab` agora oferece `STATUS` e `CAPTURE <request_id> [1]` por TCP e pela serial. Cada pedido avalia uma transação do laser e, em seguida, um relatório novo da IMU, inclusive quando o laser falha. O dispositivo deve permanecer parado até o término. Lotes com `n>1` pertencem ao incremento 4.
+Guia da captura, preservado após o incremento 4. Para calibração nativa da IMU, veja [LAB_CALIBRACAO_IMU_P4.md](LAB_CALIBRACAO_IMU_P4.md).
+
+O alvo `mm1_p4_lab` oferece `STATUS` e `CAPTURE <request_id> [1]` por TCP e pela serial. Cada pedido avalia uma transação do laser e, em seguida, um relatório novo da IMU, inclusive quando o laser falha. O dispositivo deve permanecer parado até o término. Lotes com `n>1` pertencem ao incremento 5.
 
 ## Preparar e executar
 
@@ -60,7 +62,7 @@ request_id,sample_index,distance_m,laser_valid,laser_error,qw,qx,qy,qz,azimuth_d
 - `imu_valid`: relatório novo com quaternion finito, norma dentro de 0,02 de 1 e precisão finita não negativa. Um quaternion inválido conserva componentes finitos, sequência e qualidade para diagnóstico, com `IMU_BAD_QUAT`; componentes não finitos ficam vazios. Sem relatório, esses campos ficam todos vazios.
 - `angles_valid`: os três ângulos estão definidos. Singularidade (`ANGLE_SINGULARITY`, limiar 1e-5 para projeção horizontal/par de roll) preserva quaternion, qualidade e ângulos ainda definidos, deixando vazios somente os indefinidos. Não invalida a IMU. Eixo configurado inválido produz `ANGLE_AXIS_INVALID`.
 
-Não são solicitados relatórios de aceleração no lab. A calibração interna do BNO continua sendo a do sensor; não há tare, zeramento de heading, gravação de DCD ou comandos de calibração nesta etapa. O firmware original continua habilitando os relatórios que já utilizava.
+Não são solicitados relatórios de aceleração no lab. No incremento 4, `CAL_IMU` habilita a calibração nativa e grava DCD mediante ação explícita do operador; fora dessa sessão, somente RV a 50 Hz é solicitado. Não há tare ou zeramento de heading. Durante calibração, CAPTURE responde BUSY. O firmware original continua habilitando os relatórios que já utilizava.
 
 `DONE` conta validades de laser/IMU, independentemente da singularidade dos ângulos. `COMPLETE/ERROR` com uma linha significa que ambos foram avaliados e falharam. Um sensor válido e outro inválido produz `PARTIAL`. Não há tentativas extras para substituir falhas.
 
@@ -78,7 +80,7 @@ As leituras/escritas HAL do lab têm orçamento total de 100 ms, além do limite
 
 O ACK anuncia um teto conservador de 9000 ms; o cliente soma a margem `--timeout` (padrão 5 s) à espera de cada linha da captura. O firmware limita envio pendente a 2 s e conexões sem comandos a 60 s. Fechar a conexão cancela a aquisição TCP e envia desligamento do laser. `STATUS` continua sendo atendido durante a aquisição, sujeito aos bloqueios limitados do transporte da IMU.
 
-**Após timeout, resposta inválida ou cancelamento com uma medição pendente, o laser fica em `RESYNC_REQUIRED`.** As próximas solicitações devolvem `LASER_RESYNC_REQUIRED` e continuam tentando a IMU. A UART é drenada, mas isso não prova que a medição anterior terminou: não há identificador de transação no protocolo conhecido. Nesta etapa a recuperação exige desligar e ligar a alimentação do conjunto, incluindo o módulo laser; reiniciar apenas o ESP não garante que o módulo abandonou o pedido antigo. Não há recuperação automática por simples espera. Validar uma sequência de recuperação do módulo é pendência de bancada para o incremento 4.
+**Após timeout, resposta inválida ou cancelamento com uma medição pendente, o laser fica em `RESYNC_REQUIRED`.** As próximas solicitações devolvem `LASER_RESYNC_REQUIRED` e continuam tentando a IMU. A UART é drenada, mas isso não prova que a medição anterior terminou: não há identificador de transação no protocolo conhecido. Nesta etapa a recuperação exige desligar e ligar a alimentação do conjunto, incluindo o módulo laser; reiniciar apenas o ESP não garante que o módulo abandonou o pedido antigo. Não há recuperação automática por simples espera. Validar uma sequência de recuperação do módulo é pendência de bancada para o incremento 5.
 
 Em `STATUS`, `sensors=ENABLED` significa que a camada de aquisição foi compilada. `laser=READY` significa que o transporte está disponível para uma tentativa, não que um sensor desconectado já tenha sido detectado. Confira o resultado da captura. Os contadores de relatórios, resets, erros I²C/decoder e saltos de sequência ajudam no diagnóstico; o contador de saltos não equivale a um número comprovado de amostras perdidas.
 
@@ -114,7 +116,7 @@ Nota de transcrição: a última linha foi colada com `code=NONEstate=IDLE`, sem
 
 O resultado confirma a aquisição unitária na placa com os dois sensores: `laser=READY`, `imu=READY`, distância de `1.40500009 m`, quaternion e três ângulos exportados, `laser_valid=1`, `imu_valid=1`, `angles_valid=1` e término informado como `COMPLETE/OK`, com um par válido. O azimute continua magnético sem offset e a distância sem trim.
 
-**Qualidade/calibração pendente por decisão do usuário:** a amostra preservou `accuracy_rad=3.14160156` e `imu_status=0`. O status indica orientação não confiável; `imu_valid=1` e `result=OK` confirmam os critérios de aquisição/estrutura do relatório, não boa calibração nem precisão angular comprovada. A suspeita de calibração inadequada foi registrada, mas sua causa não foi diagnosticada neste teste. A análise fica para uma etapa posterior; os comandos de calibração continuam previstos no incremento 7.
+**Qualidade/calibração pendente por decisão do usuário:** a amostra preservou `accuracy_rad=3.14160156` e `imu_status=0`. O status indica orientação não confiável; `imu_valid=1` e `result=OK` confirmam os critérios de aquisição/estrutura do relatório, não boa calibração nem precisão angular comprovada. A suspeita de calibração inadequada foi registrada, mas sua causa não foi diagnosticada neste teste. Esse registro é histórico. A calibração nativa foi antecipada e implementada no incremento 4, com ensaio físico ainda pendente; veja o guia dedicado.
 
 O `STATUS` anterior ao pedido registrou 19.295 relatórios, 1 reset, 1 erro I²C, 2 erros de decodificação e 1.296 descontinuidades de sequência. São contadores acumulados, não erros atribuídos à amostra apresentada. Foram preservados para investigação posterior; o teste não determina suas causas nem permite converter as descontinuidades diretamente em número de amostras perdidas.
 
@@ -126,4 +128,4 @@ O teste real de `STATUS` dos incrementos 1/2 está preservado em [LAB_WIFI_P4.md
 2. Conferir a distância e o formato real da resposta do laser, inclusive erros do módulo. Verificar que o feixe apaga ao terminar e ao cancelar/desconectar.
 3. Recalcular os ângulos com os quaternions recebidos e o eixo informado; observar qualidade fracionária, sequência e singularidades. Conferir que offsets/trim não nulos previamente salvos na UI não afetam os dados lab.
 4. Exercitar sensor ausente, alvo sem retorno, reset da IMU, resposta tardia e perda de Wi-Fi. Confirmar que o outro sensor continua sendo avaliado e que uma captura antiga não preenche a seguinte. Após `RESYNC_REQUIRED`, desligar e ligar também o laser.
-5. Medir duração e responsividade de `STATUS`, especialmente sob falha I²C. Esses resultados orientarão a recuperação e os lotes do incremento 4.
+5. Medir duração e responsividade de `STATUS`, especialmente sob falha I²C. Esses resultados orientarão a recuperação e os lotes do incremento 5.
