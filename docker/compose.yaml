@@ -18,3 +18,12 @@ services:
         target: /data
         bind:
           create_host_path: false
+
+  calibrate-imu:
+    extends:
+      service: status
+    entrypoint: ["python", "scripts/calibrate_imu.py"]
+    stdin_open: true
+    tty: true
+    environment:
+      LAB_CAL_LOG: "${LAB_CAL_LOG:-}"

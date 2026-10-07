@@ -22,10 +22,11 @@ class ProtocolError(Exception):
 
 
 class LineReader:
-    def __init__(self, sock, timeout):
+    def __init__(self, sock, timeout, max_line_bytes=MAX_LINE_BYTES):
         self.sock = sock
         self.timeout = timeout
         self.buffer = bytearray()
+        self.max_line_bytes = max_line_bytes
 
     def read(self, label):
         # A deadline for the whole line also bounds peers that drip bytes forever.
@@ -37,19 +38,19 @@ class LineReader:
                 del self.buffer[:newline + 1]
                 if raw.endswith(b"\r"):
                     raw = raw[:-1]
-                if len(raw) > MAX_LINE_BYTES:
-                    raise ProtocolError(f"{label}: linha excede {MAX_LINE_BYTES} bytes")
+                if len(raw) > self.max_line_bytes:
+                    raise ProtocolError(f"{label}: linha excede {self.max_line_bytes} bytes")
                 if not raw or any(byte < 32 or byte > 126 for byte in raw):
                     raise ProtocolError(f"{label}: linha vazia ou caracteres não ASCII imprimíveis")
                 return raw.decode("ascii")
-            if len(self.buffer) >= MAX_LINE_BYTES + 2:
-                raise ProtocolError(f"{label}: linha excede {MAX_LINE_BYTES} bytes")
+            if len(self.buffer) >= self.max_line_bytes + 2:
+                raise ProtocolError(f"{label}: linha excede {self.max_line_bytes} bytes")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError(f"{label}: timeout esperando linha completa")
             self.sock.settimeout(remaining)
             try:
-                chunk = self.sock.recv(MAX_LINE_BYTES + 2 - len(self.buffer))
+                chunk = self.sock.recv(self.max_line_bytes + 2 - len(self.buffer))
             except socket.timeout as exc:
                 raise TimeoutError(f"{label}: timeout esperando linha completa") from exc
             if not chunk:
