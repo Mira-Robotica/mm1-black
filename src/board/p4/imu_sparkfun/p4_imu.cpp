@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <driver/gpio.h>
+#include <esp_log.h>
 
 namespace {
 BNO08x imu;
@@ -19,6 +20,7 @@ P4ImuDiagnostics diag{};
 P4ImuLabInfo info{};
 char failure[80] = "NOT_STARTED";
 uint32_t reset_released_ms = 0;
+unsigned error_logs = 0;
 
 void feedback(P4ImuFeedback &f, const sh2_SensorValue_t &v, float accuracy = 0)
 {
@@ -96,6 +98,19 @@ void p4_sparkfun_probe_result(unsigned char addr, unsigned char rc)
 }
 void p4_sparkfun_io_error() { ++diag.io_errors; }
 void p4_sparkfun_empty_read() { ++diag.empty_reads; }
+void p4_sparkfun_protocol_error(unsigned char event)
+{
+    ++diag.decode_errors;
+    if (error_logs++ < 4)
+        Serial.printf("[LAB] IMU rejected SHTP packet event=%u\n", unsigned(event));
+}
+void p4_sparkfun_rx_error(const char *stage, const unsigned char *header, unsigned expected)
+{
+    ++diag.io_errors;
+    if (error_logs++ < 4)
+        Serial.printf("[LAB] IMU RX %s hdr=%02X %02X %02X %02X expected_len=%u\n",
+            stage, header[0], header[1], header[2], header[3], expected);
+}
 void p4_sparkfun_reset()
 {
     sh2_lab_abort();
@@ -126,9 +141,18 @@ bool p4_imu_begin(uint8_t addr)
     info.autosave_rc = SH2_ERR;
     const uint32_t started = millis();
     diag.init_ms = 0;
+    error_logs = 0;
     diag.probe_attempts = diag.probe_elapsed_ms = 0;
     diag.probe_4b_rc = diag.probe_4a_rc = -1;
     diag.probe_sda = diag.probe_scl = diag.rst_low = diag.rst_high = -1;
+    // begin() alone reuses an initialized ESP-IDF controller, including stale
+    // receive state after an error. Only this adapter owns Wire1 in the lab.
+    p4_sparkfun_stage("I2C_END", SH2_ERR_IO);
+    if (!Wire1.end()) {
+        initializing = false;
+        diag.init_ms = millis() - started;
+        return false; // No pulse/probe on a controller that could not be closed.
+    }
     p4_sparkfun_stage("I2C_BEGIN", SH2_ERR_IO);
     if (!Wire1.setBufferSize(MM1_LAB_IMU_I2C_BUFFER) ||
         !Wire1.begin(MM1_LAB_IMU_SDA, MM1_LAB_IMU_SCL, MM1_LAB_IMU_I2C_HZ)) {
@@ -137,8 +161,10 @@ bool p4_imu_begin(uint8_t addr)
         return false;
     }
     Wire1.setTimeOut(MM1_LAB_IMU_I2C_TIMEOUT_MS);
+    // Arduino's i2cInit silences this tag; keep the underlying failure visible.
+    esp_log_level_set("i2c.master", ESP_LOG_WARN);
     // Datasheet v1.16 §6.5.3: NRST >=10 ns, startup >=90 ms + typ.4 ms.
-    // INT is unwired. Start probing at 100 ms; this is not a guaranteed boot maximum.
+    // INT is unwired. 150 ms improved the user's bench boot; not a guaranteed maximum.
     pinMode(MM1_LAB_IMU_RST, OUTPUT);
     gpio_input_enable((gpio_num_t)MM1_LAB_IMU_RST); // Observe NRST without disabling output.
     digitalWrite(MM1_LAB_IMU_RST, LOW);
@@ -149,7 +175,7 @@ bool p4_imu_begin(uint8_t addr)
     diag.rst_low = gpio_get_level((gpio_num_t)MM1_LAB_IMU_RST);
     digitalWrite(MM1_LAB_IMU_RST, HIGH);
     reset_released_ms = millis();
-    delay(100);
+    delay(MM1_LAB_IMU_RESET_WAIT_MS);
     diag.rst_high = gpio_get_level((gpio_num_t)MM1_LAB_IMU_RST);
 
     // Only two addresses on the confirmed wiring; no pin survey or bus swapping.
@@ -191,9 +217,10 @@ bool p4_imu_begin(uint8_t addr)
     }
     initializing = false;
     diag.init_ms = millis() - started;
-    Serial.printf("[LAB] IMU driver=%s revision=%s I2C%d SDA=%d SCL=%d RST=%d Hz=%d init=%s rc=%d ms=%lu part=%lu fw=%u.%u.%u build=%lu\n",
+    Serial.printf("[LAB] IMU driver=%s revision=%s I2C%d SDA=%d SCL=%d RST=%d Hz=%d buffer=%d reset_wait_ms=%d init=%s rc=%d ms=%lu part=%lu fw=%u.%u.%u build=%lu\n",
         MM1_LAB_IMU_LIBRARY, MM1_LAB_IMU_REVISION, MM1_LAB_IMU_I2C_PORT,
         MM1_LAB_IMU_SDA, MM1_LAB_IMU_SCL, MM1_LAB_IMU_RST, MM1_LAB_IMU_I2C_HZ,
+        MM1_LAB_IMU_I2C_BUFFER, MM1_LAB_IMU_RESET_WAIT_MS,
         diag.init_stage, diag.init_rc, (unsigned long)diag.init_ms, (unsigned long)info.part,
         info.major, info.minor, info.patch, (unsigned long)info.build);
     Serial.printf("[LAB] IMU probe Wire rc: 0x4B=%d 0x4A=%d attempts=%lu after_release_ms=%lu SDA/SCL=%d/%d NRST_low/high=%d/%d (0=ACK 2=NACK 4=ERROR 5=TIMEOUT -1=NOT_TRIED)\n",

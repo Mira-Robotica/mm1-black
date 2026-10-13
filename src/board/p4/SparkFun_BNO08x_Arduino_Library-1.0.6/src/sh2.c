@@ -368,7 +368,8 @@ static void sensorhubAdvertHdlr(void *cookie, uint8_t tag, uint8_t len, uint8_t 
     
     switch (tag) {
         case TAG_SH2_VERSION:
-            strcpy(pSh2->version, (const char *)value);
+            if (len > 0 && len <= sizeof(pSh2->version) && memchr(value, 0, len))
+                strcpy(pSh2->version, (const char *)value);
             break;
 
         case TAG_SH2_REPORT_LENGTHS:

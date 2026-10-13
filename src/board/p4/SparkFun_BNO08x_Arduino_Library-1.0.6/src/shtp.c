@@ -275,6 +275,8 @@ static inline uint16_t min_u16(uint16_t a, uint16_t b)
 static int txProcess(shtp_t *pShtp, uint8_t chan, const uint8_t* pData, uint32_t len)
 {
     int status = SH2_OK;
+    // A malformed advertised limit must not cause zero progress or underflow.
+    if (pShtp->outMaxTransfer <= SHTP_HDR_LEN) return SH2_ERR_BAD_PARAM;
     
     bool continuation = false;
     uint16_t cursor = 0;
@@ -334,7 +336,7 @@ static void shtpAdvertHdlr(void *cookie, uint8_t tag, uint8_t len, uint8_t *val)
 
     switch (tag) {
         case TAG_SHTP_VERSION:
-            if (strlen((const char *)val) < sizeof(pShtp->shtpVersion)) {
+            if (len > 0 && len <= sizeof(pShtp->shtpVersion) && memchr(val, 0, len)) {
                 strcpy(pShtp->shtpVersion, (const char *)val);
             }
             break;
@@ -418,8 +420,55 @@ static void callAdvertHandler(shtp_t *pShtp, uint32_t guid,
     }
 }
 
+// Validate the entire TLV cargo before publishing channels or calling handlers.
+// In particular, a corrupt name must never reach the upstream strcpy calls.
+static bool validAdvertisement(const uint8_t *payload, uint16_t payloadLen)
+{
+    uint16_t cursor = 1;
+    while (cursor < payloadLen) {
+        if (payloadLen - cursor < 2) return false;
+        const uint8_t tag = payload[cursor++];
+        const uint8_t len = payload[cursor++];
+        if (len > payloadLen - cursor) return false;
+        const uint8_t *val = payload + cursor;
+        switch (tag) {
+            case TAG_NULL: // Reserved; only the parser may signal end-of-app.
+                return false;
+            case TAG_GUID:
+                if (len != 4) return false;
+                break;
+            case TAG_MAX_CARGO_PLUS_HEADER_WRITE:
+            case TAG_MAX_CARGO_PLUS_HEADER_READ:
+            case TAG_MAX_TRANSFER_WRITE:
+            case TAG_MAX_TRANSFER_READ:
+                if (len != 2 || readu16(val) <= SHTP_HDR_LEN) return false;
+                break;
+            case TAG_NORMAL_CHANNEL:
+            case TAG_WAKE_CHANNEL:
+                if (len != 1) return false;
+                break;
+            case TAG_APP_NAME:
+                if (!len || len > SHTP_APP_NAME_LEN || !memchr(val, 0, len)) return false;
+                break;
+            case TAG_CHANNEL_NAME:
+                if (!len || len > SHTP_CHAN_NAME_LEN || !memchr(val, 0, len)) return false;
+                break;
+            default:
+                break; // Unknown/app-specific tags remain extensible and bounded.
+        }
+        cursor += len;
+    }
+    return true;
+}
+
 static void processAdvertisement(shtp_t *pShtp, uint8_t *payload, uint16_t payloadLen)
 {
+    if (!validAdvertisement(payload, payloadLen)) {
+        pShtp->shortFragments++;
+        if (pShtp->eventCallback)
+            pShtp->eventCallback(pShtp->eventCookie, SHTP_SHORT_FRAGMENT);
+        return;
+    }
     uint16_t x;
     uint8_t tag;
     uint8_t len;
@@ -616,6 +665,13 @@ static void rxAssemble(shtp_t *pShtp, uint8_t *in, uint16_t len, uint32_t t_us)
     if (len > payloadLen) {
         // Only use the valid portion of the transfer
         len = payloadLen;
+    }
+    if ((size_t)(len - SHTP_HDR_LEN) > sizeof(pShtp->inPayload) - pShtp->inCursor) {
+        pShtp->inRemaining = 0;
+        pShtp->tooLargePayloads++;
+        if (pShtp->eventCallback)
+            pShtp->eventCallback(pShtp->eventCookie, SHTP_TOO_LARGE_PAYLOADS);
+        return;
     }
     memcpy(pShtp->inPayload + pShtp->inCursor, in+SHTP_HDR_LEN, len-SHTP_HDR_LEN);
     pShtp->inCursor += len-SHTP_HDR_LEN;
