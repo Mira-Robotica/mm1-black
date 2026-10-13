@@ -306,9 +306,9 @@ void calibration_tick()
         if (!diag.ready) stop("ERROR", "IMU_NOT_READY");
         else if ((uint32_t)(millis()-started) >= LAB_CAL_SESSION_TIMEOUT_MS) stop("TIMEOUT", "SESSION_TIMEOUT");
     }
-    // Falling quality returns to explicit movements; rising quality alone never advances.
-    if (phase == Phase::Ready && p4_imu_lab_info().mag.present &&
-        p4_imu_lab_info().mag.status < 2) rotations();
+    // Once movements are confirmed, keep the save step open. A single low-quality
+    // report must not discard that progress between two client polls. Current
+    // magnetic quality/freshness still gates each explicit SAVE below.
     configure_tick();
 }
 void calibration_disconnect(CalOwner source)
@@ -363,7 +363,7 @@ void calibration_command(const char *line, CalOwner source, char *out, size_t si
         } else if (save_sent) code = "SAVE_ALREADY_SENT";
         else if (phase != Phase::Ready) code = "NOT_READY_TO_SAVE";
         else if (!fresh(p4_imu_lab_info().mag)) code = "MAG_STALE";
-        else if (!magnetic_ready()) { rotations(); code = "MAG_LOW"; }
+        else if (!magnetic_ready()) code = "MAG_LOW";
         else {
             save_sent = true; phase = Phase::Saving; dcd = "PENDING";
             if (!start_op(Op::Save, SH2_LAB_SAVE_DCD)) {
