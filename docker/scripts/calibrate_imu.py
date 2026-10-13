@@ -29,6 +29,14 @@ INSTRUCTIONS = {
 QUALITIES = {"-1": "ausente", "0": "não confiável", "1": "baixo", "2": "médio", "3": "alto"}
 
 
+def instruction_text(state):
+    if state["instruction"] == "SAVE_DCD" and "SAVE" not in state["allowed"].split(","):
+        if int(state["mag_age_ms"]) < 0 or int(state["mag_age_ms"]) >= int(state["fresh_ms"]):
+            return "Movimentos preservados. Aguarde um relatório recente de Magnetic Field para salvar."
+        return "Movimentos preservados. Aguarde Magnetic Field 2 ou 3; RV 3/3 sozinho não libera a gravação."
+    return INSTRUCTIONS[state["instruction"]]
+
+
 class Journal:
     def __init__(self, path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -113,6 +121,14 @@ class Monitor:
             raise ProtocolError("Sessão mudou durante o procedimento")
         if prefix == "# ERR CAL_IMU":
             print(f"Comando recusado: {values['code']}")
+            if (values["action"] == "SAVE" and values["code"] in {"MAG_LOW", "MAG_STALE", "NOT_READY_TO_SAVE"}
+                    and values["dcd"] == "NOT_SAVED" and values["phase"] == "NONE"
+                    and values["state"] in {"READY_TO_SAVE", "CALIBRATING"}):
+                # These firmware preconditions return before starting the SH-2
+                # operation. Only an explicit refusal permits another operator
+                # attempt; a lost/malformed ACK must keep the latch set.
+                self.save_attempted = False
+                print("O dispositivo não iniciou a gravação. Quando liberado, digite salvar novamente.")
         self.current = values
         self.awaiting_reply = None
         return values
@@ -138,7 +154,7 @@ class Monitor:
             self.exchange(f"CAL_IMU CANCEL {self.owned}")
         elif text == "salvar":
             if self.save_attempted:
-                print("SAVE já foi enviado; aguarde seu resultado.")
+                print("Pedido SAVE já enviado; confira DCD e aguarde a confirmação, sem reenviar.")
             elif "SAVE" in state["allowed"].split(","):
                 self.exchange(f"CAL_IMU SAVE {self.owned}")
             else:
@@ -208,13 +224,14 @@ class Display:
         self.generations = {}
 
     def show(self, s):
-        key = (s["session_id"], s["step_id"], s["instruction"], s["state"], s["phase"])
+        text = instruction_text(s)
+        key = (s["session_id"], s["step_id"], s["instruction"], s["state"], s["phase"], text)
         changed = key != self.last_step
         result_key = tuple(s.get(k) for k in ("session_id", "result", "detail", "dcd", "restore", "failed_op", "failed_rc"))
         result_changed = s["state"] == "IDLE" and s["result"] != "NONE" and result_key != self.last_result
         if changed:
             self.journal.write("instruction", session_id=s["session_id"], step_id=s["step_id"],
-                               instruction=s["instruction"], text=INSTRUCTIONS[s["instruction"]])
+                               instruction=s["instruction"], text=text)
             self.last_step = key
         if not self.ansi and not changed and not result_changed and time.monotonic() - self.last_print < 1:
             return
@@ -231,13 +248,17 @@ class Display:
         if self.ansi and self.drawn:
             print("\033[5F\033[J", end="")
         if changed:
-            print(header + "\n" + INSTRUCTIONS[s["instruction"]])
+            print(header + "\n" + text)
         if result_changed:
             print(f"Resultado: {s['result']} ({s['detail']}) | DCD={s['dcd']} | restauração={s['restore']}")
             for line in failure_lines(s):
                 print(line)
             self.last_result = result_key
-        actions = "iniciar [4/5/6]: nova sessão | sair" if s["state"] == "IDLE" else "Enter: confirmar | salvar: Salvar DCD | cancelar | sair"
+        allowed = s["allowed"].split(",")
+        actions = " | ".join(label for action, label in (
+            ("START", "iniciar [4/5/6]: nova sessão"), ("CONFIRM", "Enter: confirmar"),
+            ("SAVE", "salvar: Salvar DCD"), ("CANCEL", "cancelar"), ("WAIT", "aguarde"),
+        ) if action in allowed) + " | sair"
         rows = [*quality, summary, actions]
         if self.ansi:
             width = max(1, shutil.get_terminal_size().columns - 1)
