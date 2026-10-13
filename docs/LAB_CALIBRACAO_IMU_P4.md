@@ -37,7 +37,7 @@ python3 docker/scripts/calibrate_imu.py --host 192.168.0.10 --log docker/data/ca
 5. **Magnetômetro:** realize roll, pitch e yaw separadamente: gire aproximadamente 180° e volte ao início, em aproximadamente 2 s por eixo. Confirme cada movimento. Após yaw, se o status magnético não estiver recente em 2 ou 3, o guia apresenta uma nova rodada com novos identificadores. Qualidade alta antecipada não dispensa nenhum movimento.
 6. **Salvar DCD:** digite **`salvar`**, depois de concluir os movimentos e observar qualidade magnética recente em 2 ou 3. Enter não salva. Aguarde `dcd=SAVED` e o término da restauração.
 
-O firmware registra a declaração do operador; não reconhece os movimentos nem avança por cronômetro ou qualidade crescente. Não há janela adicional obrigatória de qualidade alta. Se a qualidade cair antes do SAVE, o guia volta às rotações. Se o relatório envelhecer, o SAVE fica bloqueado até haver feedback recente adequado.
+O firmware registra a declaração do operador; não reconhece os movimentos nem avança por cronômetro ou qualidade crescente. Não há janela adicional obrigatória de qualidade alta. Depois de alcançar a etapa 6, os movimentos confirmados ficam preservados: oscilações de qualidade não retornam automaticamente às rotações. Qualidade magnética baixa ou relatório ausente/desatualizado bloqueiam apenas o SAVE até recuperar Magnetic Field recente em 2 ou 3. RV em 3/3 não substitui esse critério.
 
 O monitor separa Magnetic Field, Game Rotation Vector e Rotation Vector. Mostra status 0–3, idade, novidade e `accuracy_rad` do RV. Zero significa não confiável; 1 baixo, 2 médio e 3 alto. Esses números não são porcentagem de conclusão, não têm evolução necessariamente crescente e não fornecem qualidades individuais de acelerômetro/giroscópio. `accuracy_rad` também não garante erro contra uma referência externa.
 
@@ -111,7 +111,7 @@ sh tests/lab/run.sh
 docker compose -f docker/compose.yaml run --rm --entrypoint python status -m unittest discover -s tests -v
 ```
 
-O conjunto C/C++ usa implementações reais de aquisição, driver, comandos SH-2 e sessão, com HAL/sensores simulados. Verifica seleção e ordem dos movimentos, 4/5/6 posições, qualidade baixa/ausente/desatualizada, duplicatas, exclusividade, prazos, reset, máscara com on-table, retorno de SAVE e restauração, inclusive falhas. Compila o driver também sem `MM1_LAB`. Os 35 testes Python incluem fragmentação TCP, ACK incorreto, timeout/EOF, consulta durante espera por entrada, registro JSONL e ausência de ações implícitas. Os testes nativos usam ASan/UBSan; em ambientes com ptrace que impeçam LeakSanitizer, `ASAN_OPTIONS=detect_leaks=0 sh tests/lab/run.sh` mantém os demais verificadores.
+O conjunto C/C++ usa implementações reais de aquisição, driver, comandos SH-2 e sessão, com HAL/sensores simulados. Verifica seleção e ordem dos movimentos, 4/5/6 posições, qualidade baixa/ausente/desatualizada, duplicatas, exclusividade, prazos, reset, máscara com on-table, retorno de SAVE e restauração, inclusive falhas. Compila o driver também sem `MM1_LAB`. Os 39 testes Python incluem fragmentação TCP, ACK incorreto, timeout/EOF, consulta durante espera por entrada, registro JSONL e ausência de ações implícitas. Os testes nativos usam ASan/UBSan; em ambientes com ptrace que impeçam LeakSanitizer, `ASAN_OPTIONS=detect_leaks=0 sh tests/lab/run.sh` mantém os demais verificadores.
 
 Na placa, executar ainda:
 
@@ -170,4 +170,27 @@ O firmware precisa ser regravado para obter os novos campos. A correção de exi
 ```sh
 docker compose -f docker/compose.yaml build calibrate-imu
 docker compose -f docker/compose.yaml run --rm calibrate-imu
+```
+
+
+## Correção da etapa de salvar — 13/10/2026
+
+Após a correção da montagem, o usuário relatou que o cliente oferecia `salvar` e logo voltava a roll, sem conseguir concluir. O registro local `docker/data/cal-imu-1791861800676714172.jsonl` confirma **12 retornos de `READY_TO_SAVE` para `MAG_ROLL`**, com intervalos observados de 27 ms a 1,269 s. Foram registrados START, CONFIRM, STATUS e CANCEL, **nenhum comando SAVE**; o resultado final foi `CANCELLED`, `dcd=NOT_SAVED`, `save_rc=1`, `restore=OK`.
+
+A causa está no controle de etapas do firmware: qualquer relatório Magnetic Field abaixo de 2 retornava às rotações, mesmo depois de confirmar todos os movimentos. O RV podia continuar em 3/3. Como Magnetic Field é atendido a 50 Hz e o cliente consulta a 5 Hz, uma queda entre consultas podia desfazer a etapa mesmo quando o próximo STATUS já mostrava qualidade 2 outra vez. O retorno não era apenas um erro de desenho da interface.
+
+A correção preserva a etapa 6 e as confirmações durante oscilações, mantendo o critério de Magnetic Field recente 2 ou 3 **no momento do SAVE**. Nenhum aumento de qualidade ou consulta envia gravação automaticamente. Antes de chegar à etapa 6, yaw concluído com qualidade baixa continua iniciando outra rodada de movimentos, como previsto no procedimento.
+
+O cliente passa a distinguir a etapa preservada da disponibilidade momentânea de salvar. Há também uma correção para a disputa entre STATUS e SAVE: se a qualidade cair nesse intervalo, uma recusa explícita `MAG_LOW`/`MAG_STALE` com `dcd=NOT_SAVED` permite digitar `salvar` novamente quando liberado. A recusa `NOT_READY_TO_SAVE` de firmware anterior recebe o mesmo tratamento. Não há reenvio automático. SAVE aceito, resposta perdida, resposta inválida ou resultado desconhecido continuam impedindo nova tentativa pelo cliente.
+
+O JSONL mantém comandos e respostas, permitindo verificar se houve pedido de gravação. `dcd=PENDING` significa aguardar confirmação; `dcd=SAVED` confirma o ACK do sensor. A saída normal do cliente exige também `result=SAVED` e `restore=OK`; persistência após desligar/ligar continua dependendo do ensaio físico.
+
+Verificações: nove suítes nativas com ASan/UBSan, 39 testes Python por TCP em loopback e build `mm1_p4_lab` aprovados. As regressões cobrem qualidade oscilante com RV 3/3, ausência/idade do relatório, SAVE recusado sem perder movimentos, nova tentativa explícita após recusa e conclusão do cliente após ACK/restauração. A correção ainda precisa ser gravada e validada na bancada.
+
+Para usar a correção completa, recompilar/gravar `mm1_p4_lab` e reconstruir a imagem do cliente antes de iniciar outra sessão:
+
+```sh
+pio run -e mm1_p4_lab -t upload
+docker compose -f docker/compose.yaml build calibrate-imu
+docker compose -f docker/compose.yaml run --rm calibrate-imu --host IP_ATUAL_DA_PLACA
 ```
