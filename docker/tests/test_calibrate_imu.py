@@ -118,6 +118,97 @@ class CalibrationClientTests(unittest.TestCase):
             m.operator("salvar"); m.operator("salvar")
         self.assertEqual(requests, ["CAL_IMU START 4", "CAL_IMU CONFIRM 4 1", "CAL_IMU SAVE 4"])
 
+    def test_save_precondition_refusal_allows_another_explicit_attempt(self):
+        # Quality may fall between the last STATUS and processing SAVE on the P4.
+        for code in ("MAG_LOW", "MAG_STALE", "NOT_READY_TO_SAVE"):
+            seen = []
+            ready = sample(session_id="4", state="READY_TO_SAVE", instruction="SAVE_DCD",
+                           stage="6", allowed="SAVE,CANCEL", mag_status="2", rv_status="3")
+            rejected = dict(ready, action="SAVE", code=code, allowed="CANCEL", mag_status="1")
+            if code == "NOT_READY_TO_SAVE":  # Older firmware can still return to rotations.
+                rejected.update(state="CALIBRATING", instruction="MAG_ROLL", stage="5")
+            def server(conn):
+                conn.sendall(HELLO + META)
+                for command, state, ok in (
+                    ("CAL_IMU SAVE 4", rejected, False),
+                    ("CAL_IMU STATUS", ready, True),
+                    ("CAL_IMU SAVE 4", dict(ready, action="SAVE", code="ACCEPTED",
+                                           state="SAVING", instruction="WAIT_SAVE", dcd="PENDING", allowed="WAIT"), True),
+                ):
+                    seen.append(read(conn)); self.assertEqual(seen[-1], command)
+                    conn.sendall(wire(state, ok))
+                self.assertIsNone(read(conn))
+            with self.subTest(code=code), peer(server) as port, socket.create_connection(("127.0.0.1", port)) as sock, contextlib.redirect_stdout(io.StringIO()) as out:
+                m = cal.Monitor(sock, 1, MemoryJournal()); m.handshake(); m.owned = "4"; m.current = ready
+                m.operator("salvar")
+                self.assertFalse(m.save_attempted)
+                self.assertIn("não iniciou a gravação", out.getvalue())
+                m.operator("salvar")  # Still blocked locally: do not queue an automatic SAVE.
+                m.exchange("CAL_IMU STATUS")
+                m.operator("salvar"); self.assertTrue(m.save_attempted)
+                m.operator("salvar")  # Accepted once: no resubmission.
+            self.assertEqual(seen, ["CAL_IMU SAVE 4", "CAL_IMU STATUS", "CAL_IMU SAVE 4"])
+
+    def test_save_refusal_only_unlocks_when_definitely_not_started(self):
+        for patch in ({"code": "SH2_BUSY"}, {"code": "MAG_LOW", "dcd": "UNKNOWN"},
+                      {"code": "MAG_LOW", "phase": "RESTORING"}):
+            def server(conn):
+                conn.sendall(HELLO + META)
+                self.assertEqual(read(conn), "CAL_IMU SAVE 4")
+                conn.sendall(wire(sample(action="SAVE", session_id="4", state="READY_TO_SAVE", **patch), False))
+                self.assertIsNone(read(conn))
+            with self.subTest(patch=patch), peer(server) as port, socket.create_connection(("127.0.0.1", port)) as sock, contextlib.redirect_stdout(io.StringIO()):
+                m = cal.Monitor(sock, 1, MemoryJournal()); m.handshake(); m.owned = "4"
+                m.exchange("CAL_IMU SAVE 4"); m.operator("salvar")
+                self.assertTrue(m.save_attempted)
+
+    def test_save_prompt_tracks_magnetic_feedback_without_changing_steps(self):
+        ready = sample(session_id="4", state="READY_TO_SAVE", instruction="SAVE_DCD", stage="6",
+                       mag_status="2", rv_status="3", allowed="SAVE,CANCEL")
+        journal = MemoryJournal(); display = cal.Display(journal, plain=True)
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(cal.time, "monotonic", return_value=1):
+            display.show(ready)
+            display.show(dict(ready, mag_status="1", allowed="CANCEL"))
+            display.show(dict(ready, mag_age_ms="1000", allowed="CANCEL"))
+            display.show(ready)
+        messages = [e["text"] for e in journal.events if e["event"] == "instruction"]
+        self.assertEqual(len(messages), 4)
+        self.assertIn("digite salvar", messages[0])
+        self.assertIn("Magnetic Field 2 ou 3", messages[1])
+        self.assertNotIn("digite salvar", messages[1])
+        self.assertIn("relatório recente", messages[2])
+        self.assertEqual(messages[0], messages[3])
+
+    def test_monitor_finishes_after_explicit_save_ack_and_restoration(self):
+        reads, writes = os.pipe()
+        seen = []
+        ready = sample(session_id="4", state="READY_TO_SAVE", instruction="SAVE_DCD", stage="6",
+                       mag_status="2", rv_status="3", allowed="SAVE,CANCEL")
+        def server(conn):
+            conn.sendall(HELLO + META)
+            for expected, state, typed in (
+                ("CAL_IMU STATUS", sample(), b"iniciar\n"),
+                ("CAL_IMU START 6", dict(ready, action="START", code="ACCEPTED"), b"salvar\n"),
+                ("CAL_IMU SAVE 4", dict(ready, action="SAVE", code="ACCEPTED", state="SAVING",
+                                        instruction="WAIT_SAVE", dcd="PENDING", allowed="WAIT"), None),
+                ("CAL_IMU STATUS", dict(ready, state="CALIBRATING", phase="RESTORING",
+                                        instruction="RESTORING", dcd="SAVED", result="SAVED", restore="PENDING", allowed="WAIT"), None),
+                ("CAL_IMU STATUS", sample(session_id="4", dcd="SAVED", result="SAVED"), None),
+            ):
+                seen.append(read(conn)); self.assertEqual(seen[-1], expected)
+                conn.sendall(wire(state))
+                if typed: os.write(writes, typed)
+            self.assertIsNone(read(conn))
+        try:
+            with peer(server) as port, socket.create_connection(("127.0.0.1", port)) as sock, contextlib.redirect_stdout(io.StringIO()) as out:
+                journal = MemoryJournal(); m = cal.Monitor(sock, 1, journal)
+                self.assertEqual(cal.run_monitor(m, journal, plain=True, input_fd=reads), 0)
+                self.assertIn("Resultado: SAVED", out.getvalue())
+                self.assertEqual(m.current["restore"], "OK")
+            self.assertEqual(seen.count("CAL_IMU SAVE 4"), 1)
+        finally:
+            os.close(reads); os.close(writes)
+
     def test_polls_while_operator_is_idle_and_exits_without_start(self):
         reads, writes = os.pipe()
         seen = []

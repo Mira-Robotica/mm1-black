@@ -132,11 +132,31 @@ int main() {
         assert(cmd()["round"] == "2" && cmd()["instruction"] == "MAG_ROLL");
         magnetic(3); tick(); assert(cmd()["instruction"] == "MAG_ROLL");
         confirm(); confirm(); confirm(); assert(cmd()["state"] == "READY_TO_SAVE");
+        const auto ready = cmd();
+        const int previous_saves = saves;
         fake_ms += 1000; tick();
         assert(cmd("CAL_IMU SAVE " + sid)["code"] == "MAG_STALE");
-        magnetic(1); tick(); assert(cmd()["instruction"] == "MAG_ROLL");
-        magnetic(2); confirm(); confirm(); confirm();
-        const int previous_saves = saves;
+        // Bench regression: RV stays at 3 while Magnetic Field oscillates.
+        // Completed movements must survive both polling and a refused SAVE.
+        info.rv.present = true; info.rv.status = 3;
+        for (int status : {1, 2, 0, 3, 1, 2}) {
+            magnetic(status); tick();
+            auto state = cmd();
+            assert(state["state"] == "READY_TO_SAVE" && state["instruction"] == "SAVE_DCD");
+            assert(state["round"] == ready.at("round") && state["confirmed"] == ready.at("confirmed"));
+            assert(state["step_id"] == "0" && state["dcd"] == "NOT_SAVED");
+            assert(state["allowed"] == (status < 2 ? "CANCEL" : "SAVE,CANCEL"));
+            if (status < 2) {
+                auto rejected = cmd("CAL_IMU SAVE " + sid);
+                assert(rejected["code"] == "MAG_LOW" && rejected["state"] == "READY_TO_SAVE");
+            }
+            assert(saves == previous_saves); // Neither quality nor STATUS sends SAVE.
+        }
+        info.mag.present = false; tick();
+        assert(cmd()["state"] == "READY_TO_SAVE" && cmd()["allowed"] == "CANCEL");
+        assert(cmd("CAL_IMU SAVE " + sid)["code"] == "MAG_STALE");
+        assert(saves == previous_saves);
+        magnetic(2); tick();
         assert(cmd("CAL_IMU SAVE " + sid)["state"] == "SAVING");
         assert(cmd("CAL_IMU CANCEL " + sid)["code"] == "SAVE_IN_PROGRESS");
         assert(cmd("CAL_IMU SAVE " + sid)["code"] == "SAVE_ALREADY_SENT");
