@@ -2,6 +2,12 @@
 
 Implementado em 07/10/2026; estado atualizado em **13/10/2026**, revisão `fd0149c+mm1.4`. O usuário relatou melhora de estabilidade após corrigir a fiação e remapear SDA/SCL/NRST para **GPIO25/34/49**. O relato anterior de calibração do magnetômetro e Rotation Vector em **3/3** permanece como progresso funcional. Séries quantitativas de estabilidade e persistência DCD ainda não foram registradas; o usuário considera possível prosseguir com as próximas etapas.
 
+## SAVE e captura confirmados em logs — 13/10/2026
+
+Após a correção da etapa de salvar, o novo ensaio concluiu a calibração com um único SAVE, ACK do sensor (`save_rc=0 dcd=SAVED`) e restauração (`restore_rc=0 restore=OK`). O usuário confirmou o encerramento normal do cliente Docker. A captura posterior terminou `COMPLETE/OK`, com qualidade RV **3/3** e distância **0.844000041 m**. Ambos os registros usam SDA25/SCL34/NRST49, revisão `fd0149c+mm1.4` e o mesmo boot do P4.
+
+O resultado confirma o caminho funcional de calibração → SAVE → restauração → captura. Ainda não confirma persistência após desligar/ligar nem estabilidade sem erros: o contador de I/O cresceu de 0 para 139 durante a calibração. Fontes, horários, parâmetros efetivos e limites estão no [registro de calibração](LAB_CALIBRACAO_IMU_P4.md#ensaio-com-save-confirmado--13102026) e na [amostra capturada](LAB_SENSORES_P4.md#captura-após-save-confirmado--13102026).
+
 ## Resultado de bancada informado pelo usuário — 07/10/2026
 
 O usuário realizou testes promissores com esta versão: a IMU respondeu bem, foi possível calibrar o magnetômetro e o índice de qualidade do Rotation Vector aumentou para **3/3**. Esse relato confirma progresso funcional na bancada após a primeira implementação, que falhava na sondagem. O índice 3/3 é a qualidade informada pela IMU; não constitui uma medição de precisão angular contra uma referência externa.

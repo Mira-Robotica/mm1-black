@@ -6,6 +6,8 @@ O alvo `mm1_p4_lab` oferece `STATUS` e `CAPTURE <request_id> [1]` por TCP e pela
 
 Desde o incremento 5, o lab usa SparkFun 1.0.6 e I²C1 de hardware. A montagem atual (13/10/2026) usa **SDA25/SCL34 e NRST49**. O usuário identificou mau contato no I²C e relatou inversão acidental da alimentação; retirou os GPIO30/31/32 instáveis por suspeita de dano e percebeu maior estabilidade após remapear os pinos, com o reset conectado. Ver [integração e relato de bancada](LAB_IMU_SPARKFUN_P4.md); os resultados de captura abaixo são históricos. O relato anterior de calibração do magnetômetro e qualidade RV **3/3** permanece registrado, com estabilidade quantitativa e persistência DCD ainda a verificar.
 
+Atualização do ensaio de 13/10/2026: após SAVE e restauração confirmados, o novo log registra captura `COMPLETE/OK` com RV **3/3**. Ver [captura após SAVE](#captura-após-save-confirmado--13102026).
+
 ## Preparar e executar
 
 Mantenha as credenciais em `include/lab_config.h`. Arquivos locais criados no incremento 1 continuam funcionando: os parâmetros novos têm valores padrão em `src/lab/settings.h`. A configuração de fábrica do C6 e a chamada direta `hostedSetPins` foram preservadas.
@@ -121,6 +123,22 @@ O resultado confirma a aquisição unitária na placa com os dois sensores: `las
 **Qualidade/calibração pendente por decisão do usuário:** a amostra preservou `accuracy_rad=3.14160156` e `imu_status=0`. O status indica orientação não confiável; `imu_valid=1` e `result=OK` confirmam os critérios de aquisição/estrutura do relatório, não boa calibração nem precisão angular comprovada. A suspeita de calibração inadequada foi registrada, mas sua causa não foi diagnosticada neste teste. Esse registro é histórico. A calibração nativa foi antecipada e implementada no incremento 4, com sucesso parcial de bancada relatado após o incremento 5: magnetômetro calibrado e Rotation Vector em 3/3. O aceite completo e a persistência DCD continuam pendentes; veja o guia dedicado.
 
 O `STATUS` anterior ao pedido registrou 19.295 relatórios, 1 reset, 1 erro I²C, 2 erros de decodificação e 1.296 descontinuidades de sequência. São contadores acumulados, não erros atribuídos à amostra apresentada. Foram preservados para investigação posterior; o teste não determina suas causas nem permite converter as descontinuidades diretamente em número de amostras perdidas.
+
+### Captura após SAVE confirmado — 13/10/2026
+
+O último registro de `docker/data/status.jsonl` (linha 11 nesta análise) documenta `status --capture 1` após a [calibração salva e restaurada](LAB_CALIBRACAO_IMU_P4.md#ensaio-com-save-confirmado--13102026). O cliente iniciou às **06:09:12.699 UTC** e terminou às **06:09:13.521 UTC**, com `ok=true` e duração registrada de **821,666 ms** para a execução do cliente, incluindo consulta e captura.
+
+```text
+request_id,sample_index,distance_m,laser_valid,laser_error,qw,qx,qy,qz,azimuth_deg,inclination_deg,roll_deg,angles_valid,angle_error,accuracy_rad,imu_status,imu_seq,imu_valid,imu_error
+1,1,0.844000041,1,NONE,0.341247559,0.0376586914,-0.0637207031,0.937072754,309.708344,6.54941845,-5.41308594,1,NONE,0.0927734375,3,55,1,NONE
+# DONE request_id=1 completion=COMPLETE result=OK n_requested=1 n_rows=1 n_valid=1 n_laser_valid=1 n_imu_valid=1 code=NONE state=IDLE
+```
+
+A amostra tem **qualidade RV 3/3**, `laser_valid=1`, `imu_valid=1` e `angles_valid=1`, sem erro indicado na linha. A distância é **0.844000041 m**; o azimute magnético é **309.708344°**, inclinação **6.54941845°** e roll **−5.41308594°**. `accuracy_rad=0.0927734375` é a estimativa informada pela IMU, não um erro medido contra referência externa. Os metadados mantêm offset de azimute e trim de laser iguais a zero.
+
+O STATUS anterior à captura registrou `laser=READY imu=READY calibration=IDLE calibration_blocked=0`, 9.350 relatórios, 1 reset, 139 erros de I/O, 0 erros de decodificação e 1 gap de sequência. Esses contadores já tinham os mesmos valores de erro/reset no fim da calibração e no STATUS intermediário às 06:07:52. Não há STATUS posterior à captura nesse registro para calcular a variação durante a própria aquisição.
+
+A inicialização reportada foi `imu_init=READY imu_init_rc=0`, duração 211 ms e ACK de 0x4B na primeira sondagem, 150 ms após liberar NRST. O transporte é I²C1, SDA25/SCL34/NRST49, 100 kHz, SparkFun `fd0149c+mm1.4`; o sensor reportou firmware `3.12.6`, build `62`. A captura e a calibração usam o mesmo `boot_id=e3268535897ff631`, confirmando funcionamento após SAVE no mesmo boot. Persistência após desligar/ligar, repetibilidade e precisão contra referência continuam como ensaios separados.
 
 ### Ensaios ainda pendentes
 

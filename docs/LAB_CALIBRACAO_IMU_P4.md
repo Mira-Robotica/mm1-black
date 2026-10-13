@@ -2,7 +2,7 @@
 
 Atualização de **13/10/2026**: o laboratório usa SparkFun 1.0.6/I²C1, SDA25/SCL34 e NRST no GPIO49. O usuário identificou mau contato no I²C e relatou inversão acidental da alimentação do BNO086; retirou de uso os GPIO30/31/32 instáveis por suspeita de dano e observou melhora após remapear os pinos e conectar o reset. Dano permanente não foi confirmado. O protocolo de calibração permanece. O relato anterior de 07/10 registra boa resposta da IMU, calibração do magnetômetro e qualidade do Rotation Vector em **3/3**. Ver o [registro de bancada e seus limites](LAB_IMU_SPARKFUN_P4.md#relato-de-bancada-e-remapeamento--13102026).
 
-Implementado em 01/10/2026 no alvo `mm1_p4_lab`. Build P4, testes nativos e cliente TCP verificados em software. **Há sucesso parcial de calibração na placa, informado pelo usuário em 07/10/2026. O aceite completo do procedimento, a estabilidade sob carga de relatórios e a persistência após desligar/ligar permanecem pendentes.** O relato não confirma SAVE/restauração nem persistência DCD, e qualidade 3/3 não substitui uma medição de precisão angular. A ligação atual do lab é SDA25/SCL34/NRST49, definida em [`config.h`](../src/board/p4/imu_sparkfun/config.h).
+Implementado em 01/10/2026 no alvo `mm1_p4_lab`. Build P4, testes nativos e cliente TCP verificados em software. **Em 13/10/2026, os novos logs confirmam SAVE com ACK do sensor, restauração bem-sucedida e captura posterior com qualidade RV 3/3.** Esse resultado amplia o relato parcial de 07/10. O aceite completo, a estabilidade sob carga e a persistência após desligar/ligar permanecem pendentes; qualidade 3/3 não substitui uma medição de precisão angular. Ver o [ensaio com SAVE confirmado](#ensaio-com-save-confirmado--13102026). A ligação atual do lab é SDA25/SCL34/NRST49, definida em [`config.h`](../src/board/p4/imu_sparkfun/config.h).
 
 O guia segue as seis etapas do [BNO08X Sensor Calibration Procedure, revisão 1.6](datasheets/BNO08X-Sesnor-Calibration-Procedure.pdf), seções 2.1, 2.2 e 3. A calibração ocorre no BNO, com salvamento explícito do DCD na flash dele. O lab não usa NVS de heading, offsets, declinação, tare ou trim do laser. O laser fica desligado durante a sessão; o CSV de captura continua usando o Rotation Vector magnético, na mesma ordem w,x,y,z e com as mesmas colunas.
 
@@ -185,7 +185,7 @@ O cliente passa a distinguir a etapa preservada da disponibilidade momentânea d
 
 O JSONL mantém comandos e respostas, permitindo verificar se houve pedido de gravação. `dcd=PENDING` significa aguardar confirmação; `dcd=SAVED` confirma o ACK do sensor. A saída normal do cliente exige também `result=SAVED` e `restore=OK`; persistência após desligar/ligar continua dependendo do ensaio físico.
 
-Verificações: nove suítes nativas com ASan/UBSan, 39 testes Python por TCP em loopback e build `mm1_p4_lab` aprovados. As regressões cobrem qualidade oscilante com RV 3/3, ausência/idade do relatório, SAVE recusado sem perder movimentos, nova tentativa explícita após recusa e conclusão do cliente após ACK/restauração. A correção ainda precisa ser gravada e validada na bancada.
+Verificações: nove suítes nativas com ASan/UBSan, 39 testes Python por TCP em loopback e build `mm1_p4_lab` aprovados. As regressões cobrem qualidade oscilante com RV 3/3, ausência/idade do relatório, SAVE recusado sem perder movimentos, nova tentativa explícita após recusa e conclusão do cliente após ACK/restauração. Naquele fechamento, a validação física ainda estava pendente; o ensaio abaixo registra a execução posterior bem-sucedida.
 
 Para usar a correção completa, recompilar/gravar `mm1_p4_lab` e reconstruir a imagem do cliente antes de iniciar outra sessão:
 
@@ -194,3 +194,26 @@ pio run -e mm1_p4_lab -t upload
 docker compose -f docker/compose.yaml build calibrate-imu
 docker compose -f docker/compose.yaml run --rm calibrate-imu --host IP_ATUAL_DA_PLACA
 ```
+
+
+## Ensaio com SAVE confirmado — 13/10/2026
+
+Fontes conferidas: `docker/data/cal-imu-1791871483034803485.jsonl` e os dois últimos registros de `docker/data/status.jsonl` (linhas 10 e 11 na análise). Os horários abaixo são UTC do PC; em America/Sao_Paulo correspondem a três horas a menos. O usuário informou que o cliente Docker terminou com sucesso; o último STATUS da calibração contém os campos que permitem esse encerramento normal.
+
+| Marco | Evidência no log |
+| --- | --- |
+| Configuração | SparkFun 1.0.6, integração `fd0149c+mm1.4`, I²C1 a 100 kHz, SDA25/SCL34/NRST49; BNO identificado como part `10004563`, firmware `3.12.6`, build `62` |
+| Início | `CAL_IMU START 6` aceito às 06:04:59.235; sessão 1, seis posições |
+| Movimentos | 12 CONFIRM enviados uma vez cada; uma rodada de roll/pitch/yaw (`round=1`) |
+| Etapa de salvar | `READY_TO_SAVE` às 06:06:51.578, preservada até o pedido explícito, sem retorno a `MAG_ROLL` |
+| Pedido | **Um único** `CAL_IMU SAVE 1`, aceito às 06:07:09.939; `state=SAVING dcd=PENDING`; Magnetic Field 2/3, idade 10 ms, RV 3/3 |
+| Confirmação do sensor | STATUS às 06:07:09.963 com `dcd=SAVED result=SAVED`, já em `RESTORING` |
+| Conclusão | Às 06:07:10.194: `state=IDLE result=SAVED detail=NONE dcd=SAVED restore=OK`, `save_rc=0 restore_rc=0 failed_op=NONE` |
+| Configuração restaurada | Máscara ME original e efetiva `21` (`0x15`); RV a 50 Hz (`rv_us=20000`); Game RV e Magnetic Field desabilitados |
+| Parâmetros deste ensaio | `limit_ms=900000` (15 min), `op_ms=4000`, `fresh_ms=1000`; são os valores registrados, não os padrões de compilação do guia |
+
+O arquivo contém 625 consultas STATUS, um START, 12 CONFIRM e um SAVE; não há CANCEL, respostas `# ERR CAL_IMU` ou eventos de erro do cliente. Em contraste com o ensaio anterior, a etapa de salvar ficou aberta por aproximadamente **18,36 s** até a ação do operador. Isso confirma o funcionamento do caminho corrigido neste ensaio, incluindo gravação confirmada pelo sensor e restauração, sem repetição do SAVE.
+
+O contador `io_errors` passou de **0 para 139** entre o início e o salvamento. `decode_errors=0`, `resets=1` e `rv_gaps=1` permaneceram nos valores observados; Game RV e Magnetic Field terminaram com zero gaps. Os 139 erros de I/O continuaram iguais no STATUS posterior e no STATUS anterior à captura. A sessão concluída não permite afirmar ausência de falhas de transporte; a causa desses incrementos não é determinada por esses logs e permanece a investigar.
+
+Às 06:09:12.699–06:09:13.521, `status --capture 1` entregou um par laser/IMU válido, com qualidade **3/3**, `accuracy_rad=0.0927734375` e distância **0.844000041 m**; detalhes no [guia de aquisição](LAB_SENSORES_P4.md#captura-após-save-confirmado--13102026). Calibração, STATUS e captura compartilham `boot_id=e3268535897ff631` (conexões 1, 2 e 3). Portanto, confirma-se a captura após SAVE no mesmo boot, mas ainda não a conservação do DCD após desligar/ligar o conjunto. Também não há referência angular externa neste ensaio para medir a precisão real.
