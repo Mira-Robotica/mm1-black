@@ -62,14 +62,15 @@ static void write_command(const std::vector<uint8_t> &p)
 }
 int main()
 {
-    fake_pin_hook=[](int pin,int level) { if (pin==32 && level==HIGH) boot(); };
+    fake_pin_hook=[](int pin,int level) { if (pin==MM1_LAB_IMU_RST && level==HIGH) boot(); };
     fake_wire_on_write=write_command;
     assert(p4_imu_begin(0x4b));
-    assert(Wire1.port==1 && Wire1.sda==31 && Wire1.scl==30 && Wire1.hz==100000);
-    assert(Wire.sda==-1 && Wire1.timeout==50 && Wire1.buffer_size==128);
-    assert(fake_pin_writes.size()==2 && fake_pin_writes[0].pin==32 && fake_pin_writes[0].level==LOW);
+    assert(Wire1.port==1 && Wire1.sda==25 && Wire1.scl==34 && Wire1.hz==100000);
+    assert(Wire.sda==-1 && Wire1.timeout==50 && Wire1.buffer_size==32);
+    assert(Wire1.ends==1 && Wire1.begins==1 && Wire.ends==0 && Wire.begins==0);
+    assert(fake_pin_writes.size()==2 && fake_pin_writes[0].pin==49 && fake_pin_writes[0].level==LOW);
     assert(fake_pin_writes[1].ms-fake_pin_writes[0].ms==10);
-    assert(p4_imu_diagnostics().init_ms>=110 && !software_resets);
+    assert(p4_imu_diagnostics().probe_elapsed_ms>=150 && !software_resets);
     assert(p4_imu_diagnostics().hardware_resets==1);
     assert(p4_imu_diagnostics().probe_attempts==1 && p4_imu_diagnostics().probe_4b_rc==0);
     assert(p4_imu_diagnostics().probe_4a_rc==-1);
@@ -120,17 +121,17 @@ int main()
     products_enabled=false;
     assert(!p4_imu_begin(0x4a));
     assert(!strcmp(p4_imu_diagnostics().init_stage,"PRODUCT_IDS"));
-    assert(p4_imu_diagnostics().init_rc==SH2_ERR_TIMEOUT && p4_imu_diagnostics().init_ms<2400);
+    assert(p4_imu_diagnostics().init_rc==SH2_ERR_TIMEOUT && p4_imu_diagnostics().init_ms<2450);
     products_enabled=true; boot_enabled=false;
     assert(!p4_imu_begin(0x4a));
-    assert(!strcmp(p4_imu_diagnostics().init_stage,"SH2_OPEN") && p4_imu_diagnostics().init_ms<400);
+    assert(!strcmp(p4_imu_diagnostics().init_stage,"SH2_OPEN") && p4_imu_diagnostics().init_ms<450);
     boot_enabled=true; fake_wire_address=0;
     assert(!p4_imu_begin(0x4b) && !strcmp(p4_imu_diagnostics().init_stage,"NO_ACK"));
     auto d=p4_imu_diagnostics();
     assert(d.probe_4b_rc==2 && d.probe_4a_rc==2 && d.probe_attempts>2);
     assert(d.init_ms>=510 && d.init_ms<565); // bounded readiness, no endless probing
     fake_wire_address=0x4b;
-    // A device ready at 240 ms after NRST must not be rejected at the first 100 ms probe.
+    // A device ready at 240 ms after NRST must not be rejected at the first 150 ms probe.
     fake_wire_ready_at=fake_ms+250;
     assert(p4_imu_begin(0x4b));
     d=p4_imu_diagnostics();
@@ -141,12 +142,12 @@ int main()
     assert(!p4_imu_begin(0x4b));
     d=p4_imu_diagnostics();
     assert(!strcmp(d.init_stage,"I2C_PROBE_ERROR") && d.probe_4b_rc==4 && d.probe_4a_rc==-1);
-    assert(d.probe_attempts==1 && d.init_ms<120);
+    assert(d.probe_attempts==1 && d.init_ms<170);
     fake_wire_probe_rc=5;
     assert(!p4_imu_begin(0x4b));
     d=p4_imu_diagnostics();
     assert(!strcmp(d.init_stage,"I2C_PROBE_TIMEOUT") && d.probe_4b_rc==5);
-    assert(d.probe_attempts==1 && d.init_ms<170);
+    assert(d.probe_attempts==1 && d.init_ms<220);
     fake_wire_probe_rc=0;
     assert(p4_imu_begin(0x4b)); // no leaked SHTP instance
     assert(p4_imu_diagnostics().probe_attempts==1 && p4_imu_diagnostics().probe_4a_rc==-1);

@@ -35,6 +35,11 @@ trap 'rm -rf "$test_dir"' EXIT HUP INT TERM
     -DMM1_LAB=1 -I src tests/lab/test_shtp_boot.c src/board/p4/SparkFun_BNO08x_Arduino_Library-1.0.6/src/sh2_util.c -o "$test_dir/shtp-boot"
 "$test_dir/shtp-boot"
 
+"${CC:-gcc}" -std=c11 -Wall -Wextra -Werror -Wno-unused-parameter \
+    -fsanitize=address,undefined -I src tests/lab/test_shtp_rx.c \
+    src/board/p4/SparkFun_BNO08x_Arduino_Library-1.0.6/src/sh2_util.c -o "$test_dir/shtp-rx"
+"$test_dir/shtp-rx"
+
 "${CC:-gcc}" -std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-old-style-declaration -Wno-sign-compare \
     -fsanitize=address,undefined -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -DMM1_LAB=1 -I src tests/lab/test_sh2_protocol.c src/board/p4/SparkFun_BNO08x_Arduino_Library-1.0.6/src/sh2.c \
