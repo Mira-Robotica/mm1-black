@@ -33,6 +33,13 @@ O caso real `read_rc=-6`, seguido de `rc=0` na limpeza, agora tem regressão no 
 
 Os testes SH-2/SHTP agora compilam os fontes da SparkFun 1.0.6, com a extensão cooperativa do projeto. O boot verifica os 200 ms originais; Product ID mantém limite de 2 s. O teste do driver antigo fica apenas na configuração de produção.
 
-`test_sparkfun_driver.cpp` integra a implementação real do wrapper Arduino SparkFun, adaptador P4, SH-2, SHTP e decoder com Wire/GPIO/tempo simulados. Exercita I²C1 SDA31/SCL30, reset GPIO32, ausência de soft reset duplicado, endereço alternativo, todos os callbacks de um pacote com múltiplos relatórios, leitura vazia versus falha, qualidade/sequência, transferência máxima, timeout e recuperação. Um reset durante SAVE invalida o cache, aborta a operação e não repete a gravação. Os testes não validam clock stretching elétrico nem os tempos reais do módulo.
+`test_sparkfun_driver.cpp` integra a implementação real do wrapper Arduino SparkFun, adaptador P4, SH-2, SHTP e decoder com Wire/GPIO/tempo simulados. Na configuração atual de 13/10/2026, exercita I²C1 SDA25/SCL34, reset GPIO49, ausência de soft reset duplicado, endereço alternativo, todos os callbacks de um pacote com múltiplos relatórios, leitura vazia versus falha, qualidade/sequência, transferência máxima, timeout e recuperação. Um reset durante SAVE invalida o cache, aborta a operação e não repete a gravação. Os testes não validam clock stretching elétrico nem os tempos reais do módulo.
 
 A revisão `mm1.2` também verifica prontidão tardia (ACK após 240 ms), encerramento da janela de 500 ms com sensor ausente, diagnóstico distinto de NACK/erro/timeout e níveis do reset. A simulação não estabelece a causa do `NO_ACK` observado na placa.
+
+
+## Estado salvo em 13/10/2026
+
+As nove suítes passaram com `ASAN_OPTIONS=detect_leaks=0 sh tests/lab/run.sh`, mantendo ASan/UBSan ativos. O teste SparkFun acompanha a pinagem atual SDA25/SCL34/NRST49, espera pós-reset de 150 ms e buffer de 32 bytes. O stub Wire representa a reutilização de uma instância já iniciada e a limpeza feita por `end()`, permitindo verificar a reabertura após falha.
+
+`test_shtp_rx.c` usa o parser real e cobre nomes que antes excediam o buffer de 32 bytes na pilha, strings sem terminador, TLVs truncados/inválidos, rejeição integral de anúncio com prefixo válido, overflow na montagem de fragmentos e transmissão sem espaço para payload. Inclui 4096 anúncios corrompidos determinísticos sob sanitizers. O teste também cobre o limite da string de versão SHTP. As proteções permanecem necessárias mesmo após a correção física relatada pelo usuário; os testes não confirmam integridade elétrica dos GPIOs ou persistência DCD.

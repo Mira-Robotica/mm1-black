@@ -4,7 +4,7 @@ Guia da captura, preservado após o incremento 4. Para calibração nativa da IM
 
 O alvo `mm1_p4_lab` oferece `STATUS` e `CAPTURE <request_id> [1]` por TCP e pela serial. Cada pedido avalia uma transação do laser e, em seguida, um relatório novo da IMU, inclusive quando o laser falha. O dispositivo deve permanecer parado até o término. Lotes com `n>1` pertencem ao incremento 6.
 
-Desde o incremento 5, o lab usa SparkFun 1.0.6, I²C1 de hardware e NRST no GPIO32. Ver [integração, temporizações e reset remoto](LAB_IMU_SPARKFUN_P4.md); os resultados de captura abaixo são históricos. Com a versão atual, o usuário relatou boa resposta da IMU, calibração do magnetômetro e qualidade do Rotation Vector em **3/3**. Os testes foram promissores, mas ainda houve falhas não detalhadas; o aceite completo permanece pendente.
+Desde o incremento 5, o lab usa SparkFun 1.0.6 e I²C1 de hardware. A montagem atual (13/10/2026) usa **SDA25/SCL34 e NRST49**. O usuário identificou mau contato no I²C e relatou inversão acidental da alimentação; retirou os GPIO30/31/32 instáveis por suspeita de dano e percebeu maior estabilidade após remapear os pinos, com o reset conectado. Ver [integração e relato de bancada](LAB_IMU_SPARKFUN_P4.md); os resultados de captura abaixo são históricos. O relato anterior de calibração do magnetômetro e qualidade RV **3/3** permanece registrado, com estabilidade quantitativa e persistência DCD ainda a verificar.
 
 ## Preparar e executar
 
@@ -15,11 +15,11 @@ Pinagem da montagem de laboratório, confirmada pelo usuário:
 | Sensor | Conexão no P4 |
 | --- | --- |
 | Laser | UART1, 9600 8N1; TX do módulo → GPIO21, RX do módulo → GPIO22 |
-| BNO086 | **SDA GPIO31, SCL GPIO30**, I²C1 a 100 kHz; NRST GPIO32; endereço 0x4B, com tentativa de 0x4A |
+| BNO086 | **SDA GPIO25, SCL GPIO34**, I²C1 a 100 kHz; NRST GPIO49; endereço 0x4B, com tentativa de 0x4A |
 
 Os GPIO7/8 continuam reservados aos periféricos da placa. Não há varredura ou inversão automática dos pinos da IMU no alvo lab. Display, touch, áudio, SD, BLE e a UI original permanecem fora desse alvo.
 
-Esta ordem dos fios é específica da bancada. A seleção em `p4_imu.cpp` fica condicionada a `MM1_LAB`, definido pelo alvo `mm1_p4_lab`. O mapa de pinos `mm1_p4_pins.h`, a seleção de pinos dos alvos originais e a documentação geral do projeto não foram alterados por esta correção. Após recompilar e gravar o lab, a serial deve mostrar `p4_imu: bitbang SDA=GPIO31 SCL=GPIO30`. O usuário confirmou a comunicação e a captura da IMU após a correção, conforme o registro abaixo; a avaliação de calibração/precisão foi adiada.
+A pinagem atual é específica da bancada e está em [`src/board/p4/imu_sparkfun/config.h`](../src/board/p4/imu_sparkfun/config.h). O mapa `mm1_p4_pins.h` e os alvos originais permanecem preservados; eles não incorporam o remapeamento e não correspondem à ligação atual. Após gravar o lab, conferir no log `I2C1 SDA=25 SCL=34 RST=49` e em `STATUS` os mesmos pinos com `imu_transport=hardware_i2c`. Os registros antigos de bit-bang/SDA31/SCL30 abaixo documentam os ensaios anteriores e não são instrução de ligação atual.
 
 Comandos a partir da raiz do repositório:
 
@@ -78,7 +78,7 @@ O prazo padrão da resposta do laser é 3200 ms, com teto de 4500 ms para toda a
 
 Reset da IMU invalida o cache e tenta reabilitar Rotation Vector. Um reset durante a etapa IMU encerra essa tentativa com erro, permitindo avaliar a próxima solicitação. Falha na reabilitação deixa `imu=NOT_READY` até reinicializar o dispositivo. Falhas de barramento ou decodificação são separadas (`IMU_IO_ERROR`, `IMU_DECODE_ERROR`).
 
-As leituras/escritas HAL do lab têm orçamento total de 100 ms, além do limite de 50 ms por clock stretch; isso comporta os pacotes maiores da inicialização sem deixar o polling preso. Uma escrita com erro retorna falha ao SHTP, evitando repetição ilimitada; escritas maiores que 32 bytes são recusadas, sem truncamento. Os comandos utilizados nesta etapa cabem nesse limite. A UART é atendida em blocos limitados, sem `delay`/`flush` no polling. Os tempos efetivos do transporte precisam ser medidos na placa.
+O lab usa timeout Wire de 50 ms por transação no I²C de hardware. Leituras recompõem pacotes em blocos de 32 bytes e podem exigir várias transações; o orçamento agregado de 100 ms do bit-bang foi removido. O timeout Wire não equivale a um limite configurado de clock stretching. Uma escrita com erro retorna falha ao SHTP, evitando repetição ilimitada; escritas maiores que 32 bytes são recusadas, sem truncamento. Os comandos utilizados nesta etapa cabem nesse limite. A UART é atendida em blocos limitados, sem `delay`/`flush` no polling. Os tempos efetivos do transporte precisam ser medidos na placa.
 
 O ACK anuncia um teto conservador de 9000 ms; o cliente soma a margem `--timeout` (padrão 5 s) à espera de cada linha da captura. O firmware limita envio pendente a 2 s e conexões sem comandos a 60 s. Fechar a conexão cancela a aquisição TCP e envia desligamento do laser. `STATUS` continua sendo atendido durante a aquisição, sujeito aos bloqueios limitados do transporte da IMU.
 
