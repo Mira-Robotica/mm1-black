@@ -1,0 +1,3 @@
+[submodule "kinova-geomagic-noetic-demo"]
+	path = kinova-geomagic-noetic-demo
+	url = git@github.com:verlab/kinova-geomagic-noetic-demo.git
