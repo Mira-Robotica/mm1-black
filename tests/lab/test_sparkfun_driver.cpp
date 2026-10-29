@@ -39,8 +39,9 @@ static void report(uint8_t seq)
     std::vector<uint8_t> p(41,0); // base timestamp + RV + Game RV + calibrated mag
     p[0]=0xfb; p[5]=5; p[6]=seq; p[7]=2; p[16]=0x40; // qw = 1 (Q14)
     p[17]=0x00; p[18]=0x08; // accuracy = 0.5 rad (Q12)
-    p[19]=8; p[20]=seq; p[21]=3; p[30]=0x40;
-    p[31]=3; p[32]=seq; p[33]=2;
+    p[19]=8; p[20]=seq+17; p[21]=3; p[30]=0x40;
+    p[31]=3; p[32]=seq+99; p[33]=2;
+    p[35]=0xc0; p[36]=0; p[37]=0xd0; p[38]=0xff; p[39]=0x80; p[40]=2; // 12,-3,40 uT (Q4)
     packet(3,p);
 }
 static void write_command(const std::vector<uint8_t> &p)
@@ -76,14 +77,27 @@ int main()
     assert(p4_imu_diagnostics().probe_4a_rc==-1);
     assert(p4_imu_diagnostics().rst_low==0 && p4_imu_diagnostics().rst_high==1);
     assert(p4_imu_lab_info().part==0x12345678 && p4_imu_lab_info().rv_interval_us==20000);
-    assert(!p4_imu_lab_info().game_interval_us && !p4_imu_lab_info().mag_interval_us);
+    assert(p4_imu_lab_info().game_interval_us==20000 && p4_imu_lab_info().mag_interval_us==20000);
+    assert(p4_imu_diagnostics().epoch==1);
+    assert(p4_imu_lab_info().rv_confirmed_us==-1 && p4_imu_lab_info().game_confirmed_us==-1);
+    // GET_FEATURE_RESP is the sensor-reported interval, distinct from our request.
+    packet(2,{0xfc,5,0,0,0,0x10,0x27,0,0,0,0,0,0,0,0,0,0});p4_imu_poll();
+    assert(p4_imu_lab_info().rv_interval_us==20000 && p4_imu_lab_info().rv_confirmed_us==10000);
     P4ImuSample sample{}; assert(!p4_imu_snapshot(&sample));
+    P4ImuGameSample game{};P4ImuMagSample mag{};
+    assert(!p4_imu_game_snapshot(&game) && !p4_imu_mag_snapshot(&mag));
     report(255); p4_imu_poll(); assert(p4_imu_snapshot(&sample));
     assert(sample.w==1 && sample.accuracy_rad==0.5f && sample.status==2);
     assert(p4_imu_lab_info().game.present && p4_imu_lab_info().mag.present);
+    assert(p4_imu_game_snapshot(&game) && p4_imu_mag_snapshot(&mag));
+    assert(game.w==1 && game.status==3 && game.sequence==16);
+    assert(mag.x==12 && mag.y==-3 && mag.z==40 && mag.status==2 && mag.sequence==98);
+    const auto game_generation=game.generation, mag_generation=mag.generation;
     const auto generation=sample.generation;
     report(255); p4_imu_poll(); assert(p4_imu_diagnostics().generation==generation);
+    assert(p4_imu_diagnostics().game_generation==game_generation && p4_imu_diagnostics().mag_generation==mag_generation);
     report(0); p4_imu_poll(); assert(p4_imu_diagnostics().generation==generation+1);
+    assert(p4_imu_diagnostics().game_generation==game_generation+1 && p4_imu_diagnostics().mag_generation==mag_generation+1);
     assert(!p4_imu_diagnostics().sequence_gaps);
     const auto before=p4_imu_diagnostics();
     p4_imu_poll(); assert(p4_imu_diagnostics().empty_reads==before.empty_reads+1);
@@ -101,6 +115,10 @@ int main()
     packet(1,{1}); p4_imu_poll();
     assert(!sh2_lab_busy() && !p4_imu_snapshot(&sample) && !p4_imu_lab_info().rv.present);
     assert(p4_imu_diagnostics().resets==before.resets+1 && saves==2);
+    assert(p4_imu_diagnostics().epoch==before.epoch+1);
+    assert(!p4_imu_game_snapshot(&game) && !p4_imu_mag_snapshot(&mag));
+    assert(p4_imu_lab_info().rv_confirmed_us==-1);
+    assert(p4_imu_lab_info().game_interval_us==20000 && p4_imu_lab_info().mag_interval_us==20000);
     assert(p4_imu_ok() && p4_imu_lab_info().autosave_rc==0);
     report(1); p4_imu_poll(); assert(p4_imu_snapshot(&sample));
     fake_wire_write_error=true;

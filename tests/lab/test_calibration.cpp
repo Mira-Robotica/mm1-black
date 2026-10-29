@@ -90,7 +90,7 @@ void restored(const char *result) {
     tick(15); auto f = cmd();
     assert(f["state"] == "IDLE" && f["result"] == result);
     assert(!lab::calibration_blocks_capture() && mask == 0x15);
-    assert(info.mag_interval_us == 0 && info.game_interval_us == 0 && info.rv_interval_us == 20000);
+    assert(info.mag_interval_us == 20000 && info.game_interval_us == 20000 && info.rv_interval_us == 20000);
     assert(!info.mag.present && !info.rv.present);
 }
 int main() {

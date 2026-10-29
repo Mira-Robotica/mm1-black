@@ -16,7 +16,7 @@ from test_status import peer
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import calibrate_imu as cal
 
-HELLO = b"# HELLO MM1LAB 2 stage=unit_capture boot_id=1234567890abcdef connection_id=1\n"
+HELLO = b"# HELLO MM1LAB 3 stage=multi_report_capture boot_id=1234567890abcdef connection_id=1\n"
 META = b"# META commands=STATUS,CAPTURE,CAL_IMU capture=single cal_schema=1 cal_line_max=2048\n"
 
 

@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "lab/capture_service.h"
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstring>
@@ -10,10 +11,15 @@
 bool calibration_blocked = false;
 P4ImuDiagnostics diag{};
 P4ImuSample snapshot{};
+P4ImuGameSample game{};
+P4ImuMagSample mag{};
 bool p4_imu_begin(uint8_t) { diag.ready = true; return true; }
 void p4_imu_poll() {}
 P4ImuDiagnostics p4_imu_diagnostics() { return diag; }
 bool p4_imu_snapshot(P4ImuSample *s) { *s = snapshot; return diag.ready; }
+
+bool p4_imu_game_snapshot(P4ImuGameSample *s) { *s = game; return diag.ready; }
+bool p4_imu_mag_snapshot(P4ImuMagSample *s) { *s = mag; return diag.ready; }
 
 std::vector<uint8_t> frame()
 {
@@ -27,7 +33,7 @@ void tick(unsigned ms=5) { fake_ms+=ms; lab::capture_tick(); }
 void reset()
 {
     lab::capture_cancel(); fake_rx.clear(); fake_tx.clear(); fake_ms=0;
-    diag={}; snapshot={1,0,0,0,0.025f,0,254,0}; lab::capture_begin();
+    diag={}; snapshot={1,0,0,0,0.025f,0,254,0}; game={1,0,0,0,0,17,0}; mag={12,-3,40,0,99,0}; lab::capture_begin();
 }
 void measure()
 {
@@ -38,7 +44,8 @@ void measure()
 void fresh()
 {
     ++diag.empty_reads; tick();
-    snapshot.generation=++diag.generation; tick();
+    snapshot.generation=++diag.generation;
+    game.generation=++diag.game_generation; mag.generation=++diag.mag_generation; tick();
 }
 int main()
 {
@@ -87,6 +94,18 @@ int main()
     assert(s.imu.status==0 && std::fabs(s.imu.accuracy_rad-.025f)<1e-8f);
     char out[2048]; assert(lab::format_sample(out,sizeof(out),s));
     assert(std::strstr(out,"result=OK") && std::strstr(out,"n_rows=1"));
+    assert(s.grv_valid && s.mag_valid && s.grv.sequence==17 && s.mag.sequence==99);
+    assert(strstr(out,"n_imu_valid=1 n_grv_valid=1 n_mag_valid=1 imu_reset=0"));
+    std::string csv(out);
+    const auto row_start=csv.find('\n')+1, row_end=csv.find('\n',row_start);
+    std::vector<std::string> columns;
+    for(size_t pos=row_start;pos<=row_end;) {
+        const auto end=std::min(csv.find(',',pos),row_end);
+        columns.push_back(csv.substr(pos,end-pos));pos=end+1;
+    }
+    assert(columns.size()==35 && columns[19]=="1" && columns[24]=="17");
+    assert(columns[27]=="12" && columns[28]=="-3" && columns[29]=="40");
+    assert(columns[31]=="99" && columns[32]=="1" && columns[34]=="0");
     assert(!lab::format_sample(out,10,s));
     assert(!lab::capture_start(2));
     // Laser missing/timeout still evaluates IMU; late replies cannot contaminate the next request.
@@ -118,6 +137,51 @@ int main()
     assert(lab::format_sample(out,sizeof(out),s)); assert(!strstr(out,"nan"));
     reset();measure();++diag.empty_reads;tick();tick(1000);
     assert(!strcmp(lab::capture_sample().imu_error,"IMU_TIMEOUT"));
+    // Independent report arrival: no equal sequence, generation or packet required.
+    reset();measure();++diag.empty_reads;tick();
+    mag.generation=++diag.mag_generation;tick();assert(!lab::capture_ready());
+    game.generation=++diag.game_generation;tick();assert(!lab::capture_ready());
+    snapshot.generation=++diag.generation;tick();assert(lab::capture_ready());
+    // Every missing type times out independently; other samples remain intact.
+    for (int missing=0;missing<3;++missing) {
+        reset();measure();++diag.empty_reads;tick();
+        if(missing!=0) snapshot.generation=++diag.generation;
+        if(missing!=1) game.generation=++diag.game_generation;
+        if(missing!=2) mag.generation=++diag.mag_generation;
+        tick(); assert(!lab::capture_ready());tick(1000);s=lab::capture_sample();
+        assert(lab::capture_ready() && s.laser.valid);
+        assert(s.imu_valid==(missing!=0) && s.grv_valid==(missing!=1) && s.mag_valid==(missing!=2));
+        assert(!strcmp(missing==0?s.imu_error:missing==1?s.grv_error:s.mag_error,
+                       missing==0?"IMU_TIMEOUT":missing==1?"GRV_TIMEOUT":"MAG_TIMEOUT"));
+        assert(lab::format_sample(out,sizeof(out),s) && strstr(out,"result=PARTIAL"));
+    }
+    // Stale GRV/MAG reports before the common drain cannot satisfy this capture.
+    reset();measure();game.generation=++diag.game_generation;mag.generation=++diag.mag_generation;
+    ++diag.empty_reads;tick();snapshot.generation=++diag.generation;tick();tick(1000);
+    s=lab::capture_sample();assert(s.imu_valid && !s.grv_received && !s.mag_received);
+    reset();measure();game.w=2;mag.y=NAN;fresh();s=lab::capture_sample();
+    assert(s.imu_valid && s.grv_received && !s.grv_valid && !strcmp(s.grv_error,"GRV_BAD_QUAT"));
+    assert(s.mag_received && !s.mag_valid && !strcmp(s.mag_error,"MAG_NONFINITE"));
+    assert(lab::format_sample(out,sizeof(out),s) && strstr(out,",12,,40,") && !strstr(out,"nan"));
+    reset();measure();++diag.empty_reads;tick();
+    snapshot.generation=++diag.generation;++diag.decode_errors;tick();
+    s=lab::capture_sample();assert(lab::capture_ready() && s.imu_valid && s.laser.valid);
+    assert(!s.grv_received && !strcmp(s.grv_error,"IMU_DECODE_ERROR"));
+    // An epoch change preserves pre-reset RV and cannot combine it with new GRV/MAG.
+    reset();diag.epoch=7;measure();++diag.empty_reads;tick();
+    snapshot.generation=++diag.generation;tick();
+    ++diag.epoch;game.generation=++diag.game_generation;mag.generation=++diag.mag_generation;tick();
+    s=lab::capture_sample();assert(lab::capture_ready() && s.imu_valid && s.imu_epoch==7 && s.imu_reset);
+    assert(!s.grv_received && !s.mag_received && !strcmp(s.grv_error,"IMU_RESET") && !strcmp(s.mag_error,"IMU_RESET"));
+    assert(lab::format_sample(out,sizeof(out),s) && strstr(out,"imu_reset=1"));
+    reset();assert(lab::capture_start(1));++diag.epoch;tick();
+    assert(lab::capture_ready() && lab::capture_sample().imu_reset);
+    assert(!strcmp(lab::capture_sample().imu_error,"IMU_RESET"));
+    // Entirely missing sensors produce ERROR with zero counts.
+    reset();assert(lab::capture_start(1));tick(50);tick(120);tick(3200);tick(1000);
+    s=lab::capture_sample();assert(lab::capture_ready());
+    assert(lab::format_sample(out,sizeof(out),s) && strstr(out,"result=ERROR"));
+    assert(strstr(out,"n_valid=0 n_laser_valid=0 n_imu_valid=0 n_grv_valid=0 n_mag_valid=0"));
     reset();assert(lab::capture_start(1));tick(50);tick(120);lab::capture_cancel();
     assert(!strcmp(lab::laser_state(),"RESYNC_REQUIRED"));
     assert(fake_tx[fake_tx.size()-2]==0); // Last command turns beam off.

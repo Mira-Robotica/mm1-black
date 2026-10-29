@@ -149,7 +149,7 @@ class StatusTests(unittest.TestCase):
                 status.LineReader(Drip(), 0.1).read("HELLO")
 
     def test_line_limits_and_invalid_bytes(self):
-        for data in (b"x" * 1025 + b"\n", b"x" * 1026, b"\n", b"bad\x00\n", b"bad\xff\n"):
+        for data in (b"x" * 2049 + b"\n", b"x" * 2050, b"\n", b"bad\x00\n", b"bad\xff\n"):
             with self.subTest(data=data[:20]), peer(lambda conn: conn.sendall(data)) as port:
                 with self.assertRaises(status.ProtocolError):
                     status.query_status("127.0.0.1", port, 1)
