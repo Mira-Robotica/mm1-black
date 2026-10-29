@@ -1,4 +1,4 @@
-# Testes nativos dos incrementos 3, 4 e 5
+# Testes nativos dos incrementos 3–6
 
 Compilam as implementações reais de orientação, parser, polling UART, aquisição e CSV com relógio/UART/IMU simulados. Também compilam o driver real da IMU com GPIO e SH-2 simulados, nos modos lab e original. Não acessam a placa nem leem as credenciais locais: `stubs/lab_config.h` isola os parâmetros do ensaio. Com GCC C++17 e os sanitizers, a partir da raiz:
 
@@ -46,3 +46,10 @@ As nove suítes passaram com `ASAN_OPTIONS=detect_leaks=0 sh tests/lab/run.sh`, 
 
 
 A regressão de salvamento de 13/10/2026 também verifica que, após alcançar `READY_TO_SAVE`, Magnetic Field oscilando em 0–3 com RV em 3 não apaga as confirmações nem reinicia roll. Dados ausentes/antigos e qualidade baixa recusam SAVE sem envio SH-2; feedback recuperado permite exatamente um SAVE explícito, seguido de restauração. As opções de 4/5/6 posições percorrem esse cenário. Antes da etapa final, qualidade alta ainda não dispensa confirmação dos movimentos.
+
+
+## Captura conjunta (16/10/2026)
+
+O incremento 6 estende a aquisição para três caches/contadores, barreira comum após o laser, chegada em ordens/sequências diferentes e ausência individual. Testa baixa qualidade, quaternions inválidos, campo não finito, prazo/backlog, preservação de relatórios válidos diante de falha e contagens/35 colunas do schema 3. Mudança de epoch durante a captura impede mistura entre sessões, preservando o que já foi obtido. Reset durante o laser e cancelamento também são exercitados.
+
+A integração SparkFun verifica componentes completos de GRV/campo em µT, duplicatas independentes, invalidação/epoch no reset, três relatórios habilitados e intervalo confirmado diferente do solicitado. A suíte de calibração confere restauração dos três relatórios a 20.000 µs. As nove suítes passaram com ASan/UBSan; os 41 testes Python passaram em loopback. O aceite físico segue pendente no plano.

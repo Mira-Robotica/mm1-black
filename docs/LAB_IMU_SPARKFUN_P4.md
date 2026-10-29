@@ -1,6 +1,6 @@
 # Incremento 5: SparkFun, I²C1 e reset da IMU
 
-Implementado em 07/10/2026; estado atualizado em **13/10/2026**, revisão `fd0149c+mm1.4`. O usuário relatou melhora de estabilidade após corrigir a fiação e remapear SDA/SCL/NRST para **GPIO25/34/49**. O relato anterior de calibração do magnetômetro e Rotation Vector em **3/3** permanece como progresso funcional. Séries quantitativas de estabilidade e persistência DCD ainda não foram registradas; o usuário considera possível prosseguir com as próximas etapas.
+Implementado em 07/10/2026; estado atualizado em **16/10/2026**, revisão `fd0149c+mm1.5`. O usuário relatou melhora de estabilidade após corrigir a fiação e remapear SDA/SCL/NRST para **GPIO25/34/49**. O relato anterior de calibração do magnetômetro e Rotation Vector em **3/3** permanece como progresso funcional. Séries quantitativas de estabilidade e persistência DCD ainda não foram registradas; o usuário considera possível prosseguir com as próximas etapas.
 
 ## SAVE e captura confirmados em logs — 13/10/2026
 
@@ -45,7 +45,7 @@ Os parâmetros estão em [`config.h`](../src/board/p4/imu_sparkfun/config.h). O 
 
 ## Revisão da biblioteca e alterações locais
 
-A base é [SparkFun v1.0.6](https://github.com/sparkfun/SparkFun_BNO08x_Arduino_Library/releases/tag/v1.0.6), commit `fd0149c280b4c7420e2dea4d034587373a8ca8b9`. O SH-2 é o snapshot **incluído nessa revisão**, sem importar outra versão CEVA. O pacote não fornece uma revisão independente do upstream SH-2; não foi atribuída uma por suposição. O [manifesto SHA-256](../src/board/p4/imu_sparkfun/upstream-sha256.json) identifica os arquivos fornecidos pelo usuário antes das alterações. Os diagnósticos identificam a integração local como `fd0149c+mm1.4`.
+A base é [SparkFun v1.0.6](https://github.com/sparkfun/SparkFun_BNO08x_Arduino_Library/releases/tag/v1.0.6), commit `fd0149c280b4c7420e2dea4d034587373a8ca8b9`. O SH-2 é o snapshot **incluído nessa revisão**, sem importar outra versão CEVA. O pacote não fornece uma revisão independente do upstream SH-2; não foi atribuída uma por suposição. O [manifesto SHA-256](../src/board/p4/imu_sparkfun/upstream-sha256.json) identifica os arquivos fornecidos pelo usuário antes das alterações. Os diagnósticos identificam a integração local como `fd0149c+mm1.5`. O incremento 6 acrescenta caches completos RV/GRV/Magnetic Field, epoch de inicialização/reset, perfil normal de 50 Hz por tipo e registro de Get Feature Response para distinguir intervalos confirmados/solicitados.
 
 A comparação mostrou que o `sh2.c` fornecido coincide com a base do driver antigo, descontadas as extensões `MM1_LAB`. Por isso, trocar apenas a pasta não elimina os problemas já reproduzidos. As mudanças ficaram limitadas a três arquivos da biblioteca, com a API cooperativa em arquivos do projeto:
 
@@ -78,7 +78,7 @@ O timeout de transação do Wire não é a configuração elétrica de clock str
 
 No boot e em `IMU_RESET`, o adaptador encerra a instância `Wire1` antes de configurar novamente I²C1, invalida os caches, pulsa GPIO49 e identifica a IMU. Se `Wire1.end()` falhar, registra `I2C_END` e encerra a tentativa antes de reinicializar o barramento ou pulsar NRST. O encerramento explícito evita reaproveitar estado de uma tentativa anterior com falha; I²C0 não é reinicializado. O pino fica alto após o pulso. `BNO08x::begin()` recebe RST=-1 porque o GPIO já é controlado pelo adaptador; assim não há segundo pulso nem acesso ao sensor antes de liberar o reset. Há uma tentativa de abertura SH-2 por inicialização. Antes disso, somente a sondagem de endereço pode ser repetida dentro da janela de prontidão de 500 ms. Se um endereço responde mas o SH-2 falha, a etapa/código dessa falha são preservados.
 
-Em reset espontâneo sinalizado pelo SH-2, os caches de captura/calibração e a operação pendente são invalidados imediatamente. Reaplicam-se RV a 50 Hz e autosave desabilitado, verificando os retornos. Falha deixa a IMU indisponível. O serviço de calibração encerra a sessão, preservando `SAVE_UNKNOWN` se uma gravação estava em andamento. Não há limpeza de DCD, SAVE ou retomada de calibração automáticos.
+Em reset espontâneo sinalizado pelo SH-2, os caches de captura/calibração e a operação pendente são invalidados imediatamente. Reaplicam-se RV, GRV e Magnetic Field a 50 Hz nominais cada e autosave desabilitado, verificando os retornos. Falha deixa a IMU indisponível. O serviço de calibração encerra a sessão, preservando `SAVE_UNKNOWN` se uma gravação estava em andamento. Não há limpeza de DCD, SAVE ou retomada de calibração automáticos.
 
 O comando adicional abaixo está disponível tanto por TCP quanto por serial:
 

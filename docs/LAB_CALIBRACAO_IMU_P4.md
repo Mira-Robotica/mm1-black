@@ -100,7 +100,7 @@ Depois de inicialização/reset, o lab envia `sh2_setDcdAutoSave(false)` e regis
 
 Save DCD (0x06) tem resposta do sensor. Apenas ACK de sucesso gera `dcd=SAVED`; rejeição do hub gera `FAILED`; timeout, perda de confirmação ou reset durante SAVE geram `UNKNOWN`. Não há repetição automática. É possível `dcd=SAVED result=ERROR detail=RESTORE_FAILED`: a gravação foi confirmada, mas a restauração falhou. DCD salvo pertence à flash do BNO, separado da NVS do ESP.
 
-Todo encerramento tenta desligar relatórios auxiliares, restaurar/verificar a máscara ME original, voltar ao RV a 50 Hz e invalidar caches. Uma restauração falha mantém CAPTURE/START bloqueados; reinicialize o conjunto e investigue o erro. Um reset observado permite nova tentativa limitada de restauração, sem retomar movimentos nem repetir SAVE. Desligar/ligar fisicamente após `SAVED` é necessário para validar persistência, mas não ocorre automaticamente.
+Desde o incremento 6, todo encerramento tenta restaurar RV, Game RV e Magnetic Field a 50 Hz nominais cada, restaurar/verificar a máscara ME original e invalidar os três caches. O perfil durante a calibração continua RV 10 Hz, Game RV 20 Hz e Magnetic Field 50 Hz. Uma restauração falha mantém CAPTURE/START bloqueados; reinicialize o conjunto e investigue o erro. Um reset observado permite nova tentativa limitada de restauração, sem retomar movimentos nem repetir SAVE. Desligar/ligar fisicamente após `SAVED` é necessário para validar persistência, mas não ocorre automaticamente.
 
 ## Verificação e aceite de bancada
 
@@ -117,7 +117,7 @@ Na placa, executar ainda:
 
 1. Sequência completa por Wi-Fi com USB desconectado, nas opções 4/5/6; repetir pelos mesmos comandos na serial. Conferir o produto/firmware registrado, taxas solicitadas e feedback recente sob a carga de 50/20/10 Hz.
 2. Falta/duplicata de confirmação, IDs inválidos, SAVE antecipado, qualidade alta antes de terminar, qualidade oscilando, relatório ausente, timeout, disputa serial/TCP e bloqueio mútuo com CAPTURE.
-3. Cancelamento, queda de Wi-Fi, reset, falha/timeout de comando e SAVE. Conferir o último resultado ao reconectar, ausência de reenvio e retorno ao RV a 50 Hz. Investigar os contadores de I²C/decodificação/sequência sem atribuir automaticamente sua causa à calibração.
+3. Cancelamento, queda de Wi-Fi, reset, falha/timeout de comando e SAVE. Conferir o último resultado ao reconectar, ausência de reenvio e retorno aos três relatórios a 50 Hz nominais (incremento 6). Investigar os contadores de I²C/decodificação/sequência sem atribuir automaticamente sua causa à calibração.
 4. Após SAVE confirmado, desligar/ligar o conjunto, registrar dados antes/depois e verificar conservação do DCD. Testar também a política sem autosave; retorno de software não substitui esse ensaio.
 5. Captura unitária posterior com CSV preservado, azimute magnético sem offset e laser sem trim. Avaliação metrológica contra uma referência e lotes continuam nos incrementos seguintes.
 

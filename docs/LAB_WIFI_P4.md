@@ -1,6 +1,6 @@
 # Primeiro incremento P4: Wi-Fi, ping e diagnóstico TCP
 
-Este documento preserva as instruções e o resultado dos incrementos 1/2. O alvo atual também inclui a aquisição unitária do incremento 3, descrita em [LAB_SENSORES_P4.md](LAB_SENSORES_P4.md), e anuncia `stage=unit_capture`. As referências abaixo à ausência de sensores descrevem a versão de rede originalmente testada.
+Este documento preserva as instruções e o resultado dos incrementos 1/2. O alvo atual também inclui a aquisição unitária do incremento 3, descrita em [LAB_SENSORES_P4.md](LAB_SENSORES_P4.md), e anuncia `stage=multi_report_capture` com schema 3 desde o incremento 6. As referências abaixo à ausência de sensores descrevem a versão de rede originalmente testada.
 
 O ambiente `mm1_p4_lab` compila somente a entrada de laboratório, a rede e a configuração SDIO do ESP32-C6. Ele é o ambiente padrão do projeto. Os alvos `mm1_p4` e `denky32` continuam selecionáveis; o `src/main.cpp` da aplicação original foi preservado e a entrada de laboratório fica em `src/lab/main.cpp`.
 

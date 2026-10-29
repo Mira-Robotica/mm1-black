@@ -1,6 +1,6 @@
 # Cliente de bancada: STATUS e captura unitária via TCP
 
-Este diretório contém o ambiente Python iniciado no segundo incremento e ampliado no terceiro. Ele recebe `HELLO` e `META`, envia `STATUS` e mostra a resposta completa. Com `--capture ID`, também solicita uma aquisição unitária de laser/IMU e espera seu `DONE`. Lotes e movimentação do manipulador pertencem às próximas etapas.
+Este diretório contém o ambiente Python iniciado no segundo incremento e ampliado até o sexto. Ele recebe `HELLO` e `META`, envia `STATUS` e mostra a resposta completa. Com `--capture ID`, também solicita uma aquisição unitária de laser, RV, GRV e campo magnético calibrado e espera seu `DONE`. Lotes e movimentação do manipulador pertencem às próximas etapas.
 
 ## Testar a placa
 
@@ -25,7 +25,7 @@ Exemplo de saída do firmware do incremento 1 (valores ilustrativos):
 # OK STATUS stage=network_only wifi=CONNECTED ip=192.168.1.123 rssi_dbm=-50 tcp=LISTENING port=5000 hosted=1 sensors=NOT_IMPLEMENTED attempt=1 disconnect_reason=0 uptime_ms=1234
 ```
 
-A execução sem `--capture` termina após o `STATUS`, sem solicitar medição. No incremento 3, as respostas informam `stage=unit_capture`, `capture=single` e `sensors=ENABLED`, além dos diagnósticos de sensores. Feche outros clientes TCP antes do teste: o firmware aceita apenas uma conexão por vez.
+A execução sem `--capture` termina após o `STATUS`, sem solicitar medição. No incremento 6, as respostas informam `HELLO MM1LAB 3 stage=multi_report_capture`, `schema=3`, `capture=single` e `sensors=ENABLED`, além dos diagnósticos de sensores. Feche outros clientes TCP antes do teste: o firmware aceita apenas uma conexão por vez.
 
 ## Calibrar a IMU (incremento 4)
 
@@ -40,7 +40,7 @@ O serviço usa rede host, TTY interativo e o mesmo volume de dados. Logs JSONL c
 
 Veja [o guia completo](../docs/LAB_CALIBRACAO_IMU_P4.md) para preparar o ambiente, usar a serial, interpretar qualidade/DCD, configurar prazos e executar o aceite físico. A implementação e os testes em software não comprovam persistência após desligar/ligar o BNO.
 
-## Testar uma aquisição (incremento 3)
+## Testar uma aquisição (incremento 6 / schema 3)
 
 Após gravar o novo firmware e reconstruir a imagem, mantenha a trena parada e execute:
 
@@ -50,7 +50,11 @@ docker compose -f docker/compose.yaml run --rm status --host 192.168.0.10 --capt
 
 Use o IP atual da placa. O cliente consulta `STATUS`, envia `CAPTURE 1 1` e espera ACK, cabeçalho CSV, uma linha e `DONE`. Não repete medições automaticamente. A opção recebe um ID positivo de 32 bits; cada execução abre outra conexão e pode reutilizar o mesmo ID. A camada atual só aceita `n=1`.
 
-A saída conserva distância original, azimute magnético sem offset, inclinação/roll, quaternion e qualidade. Cada sensor tem validade/erro próprios, e até a falha dos dois produz uma linha. Singularidades podem deixar somente alguns ângulos vazios; quaternion/qualidade válidos são preservados. O JSONL em `docker/data/capture.jsonl` registra as linhas CSV e os campos interpretados, além dos horários da transação no PC. Ainda não há um arquivo CSV de poses do manipulador.
+A saída conserva distância original, quaternion/ângulos/qualidade do RV, quaternion/qualidade do GRV e componentes XYZ/qualidade do campo magnético calibrado em µT. Cada relatório tem validade/erro e sequência próprios, e até a falha de todos produz uma linha. Os ângulos continuam derivados somente do RV; o heading do GRV é arbitrário e não é realinhado ao norte. `n_imu_valid` conta RV; `n_grv_valid` e `n_mag_valid` contam os novos relatórios; `n_valid` e `result=OK` exigem os quatro resultados válidos. Singularidades podem deixar somente alguns ângulos vazios; quaternion/qualidade válidos são preservados. O JSONL em `docker/data/capture.jsonl` registra as linhas CSV e os campos interpretados, além dos horários da transação no PC. Ainda não há um arquivo CSV de poses do manipulador.
+
+Os metadados preservam IDs, unidades/referenciais, intervalos nominais e a identificação do driver. `STATUS` registra intervalos solicitados e confirmados pelo sensor (`-1` se ainda desconhecidos), além dos contadores por relatório. Os 50 Hz nominais não comprovam a taxa real entregue.
+
+O JSONL inclui `capture.orientation_session` com `boot_id` e `imu_epoch`, além de `capture.imu_reset`. Uma mudança de sessão ou um reset exige tratar a continuidade de yaw do GRV na análise; não há realinhamento automático. Se faltar o DONE, o log mantém linhas e eventual amostra recebida, mas registra `ok=false` e `capture.complete=false`. Somente DONE válido marca `complete=true`.
 
 Código de saída 0 e `ok=true` no registro indicam protocolo válido, inclusive quando `DONE` informa `PARTIAL`/`ERROR`. Verifique os dados de medição antes de usá-los. `sensors=ENABLED` não certifica sensores presentes. Consulte [LAB_SENSORES_P4.md](../docs/LAB_SENSORES_P4.md) para pinagem, convenções, prazos e ensaio físico. Após `LASER_RESYNC_REQUIRED`, desligue e ligue também a alimentação do laser; apenas reiniciar o ESP não garante a eliminação de uma medição pendente no módulo.
 
@@ -74,7 +78,7 @@ Também é possível salvar diretamente sem `.env` (o Compose usa UID/GID 1000 p
 LAB_UID=$(id -u) LAB_GID=$(id -g) docker compose -f docker/compose.yaml run --rm status --host 192.168.1.123 --log /data/status.jsonl
 ```
 
-Cada consulta acrescenta uma linha JSON ao arquivo `docker/data/status.jsonl`, preservando registros anteriores. O registro inclui destino, sucesso/falha do protocolo, erro quando houver, horários UTC de início/fim do PC e duração medida com relógio monotônico. Em caso de sucesso, inclui também as linhas recebidas e seus campos (três no STATUS, sete com captura). São horários da transação no PC, não instantes de medição dos sensores. O relógio vem do host; não há NTP no cliente nem no ESP.
+Cada consulta acrescenta uma linha JSON ao arquivo `docker/data/status.jsonl`, preservando registros anteriores. O registro inclui destino, sucesso/falha do protocolo, erro quando houver, horários UTC de início/fim do PC e duração medida com relógio monotônico. Inclui as linhas recebidas e os campos já interpretados, mesmo em falhas de comunicação (três linhas em STATUS completo, sete em captura completa). São horários da transação no PC, não instantes de medição dos sensores. O relógio vem do host; não há NTP no cliente nem no ESP.
 
 O volume mantém os registros após `--rm`. `.env` e os dados gerados ficam fora do Git e do contexto de build. A imagem não contém credenciais Wi-Fi. Sem `--log` ou `LAB_STATUS_LOG`, a saída aparece somente no terminal.
 
@@ -82,7 +86,7 @@ O volume mantém os registros após `--rm`. `.env` e os dados gerados ficam fora
 
 O Compose usa **`network_mode: host`**, sem bridge adicional nem publicação de portas. O ambiente de referência é Docker Engine no Linux; o contêiner compartilha as interfaces e rotas do PC. Não usa `privileged`, USB ou acesso ao socket Docker. Rotas, firewall e isolamento do AP ainda precisam permitir a comunicação. Veja a [documentação da rede host](https://docs.docker.com/engine/network/drivers/host/).
 
-O cliente aceita IPv4 numérico para evitar uma espera de DNS fora do timeout. O timeout aplica-se separadamente à conexão, ao envio e à leitura de cada linha completa; bytes chegando aos poucos não reiniciam o prazo da linha. Após ACK de captura, a espera por linha passa a ser o prazo anunciado (até 9 s) mais a margem `--timeout`. Cada linha recebida pode ter até 1024 bytes, com LF ou CRLF. Os cumprimentos, protocolo 2, etapas `network_only`/`unit_capture` e campos de `STATUS` são verificados; na captura também são verificados schema, ID, cabeçalho, valores/validade e contagens de `DONE`.
+O cliente aceita IPv4 numérico para evitar uma espera de DNS fora do timeout. O timeout aplica-se separadamente à conexão, ao envio e à leitura de cada linha completa; bytes chegando aos poucos não reiniciam o prazo da linha. Após ACK de captura, a espera por linha passa a ser o prazo anunciado (até 9 s) mais a margem `--timeout`. Cada linha recebida pode ter até 2048 bytes, com LF ou CRLF. STATUS aceita protocolo 2 (`network_only`/`unit_capture`) e 3 (`multi_report_capture`). CAPTURE exige protocolo/schema 3 e recusa versões anteriores explicitamente. São verificados ID, cabeçalho, finitude/norma dos quaternions, validade, qualidade, epoch, reset e contagens do DONE. O monitor de calibração aceita os dois cumprimentos e mantém `cal_schema=1`.
 
 Código de saída:
 
@@ -103,7 +107,7 @@ Depois de construir a imagem, execute a suíte com servidores TCP simulados em l
 docker compose -f docker/compose.yaml run --rm --entrypoint python status -m unittest discover -s tests -v
 ```
 
-A suíte atual tem 39 testes, incluindo calibração, recusa de SAVE antes da gravação, conclusão após ACK/restauração e exibição de resultados sem repetição. Eles verificam a troca real por sockets, leitura fragmentada e agrupada, CRLF, EOF, timeouts, limite de linha, mensagens inválidas, códigos de saída e persistência do JSONL, incluindo captura válida, falhas de sensores, singularidades e inconsistências de ACK/CSV/DONE. Não acessam a placa nem o manipulador. O simulador manual abaixo continua servindo somente `STATUS` da etapa `network_only`.
+A suíte atual tem 41 testes, incluindo calibração, recusa de SAVE antes da gravação, conclusão após ACK/restauração e exibição de resultados sem repetição. Eles verificam a troca real por sockets, leitura fragmentada e agrupada, CRLF, EOF, timeouts, limite de linha, mensagens inválidas, códigos de saída e persistência do JSONL, incluindo captura schema 3 válida, baixa qualidade, ausência individual de relatório, dados inválidos, reset, falhas de sensores, singularidades, rejeição do schema 2 para captura, preservação da amostra antes de EOF e inconsistências de ACK/CSV/DONE. Não acessam a placa nem o manipulador. O simulador manual abaixo continua servindo somente `STATUS` da etapa `network_only`.
 
 Para experimentar manualmente, abra dois terminais. No primeiro:
 
@@ -140,4 +144,4 @@ A amostra preservou `imu_status=0` e `accuracy_rad=3.14160156`. O sucesso da aqu
 
 A imagem fixa Python `3.12.14-slim-bookworm`; o cliente e os testes usam somente a biblioteca padrão. `requirements.txt` registra essa ausência de dependências externas e receberá versões fixadas quando necessário. Após editar scripts ou dependências, execute novamente o build.
 
-O contexto de build é exclusivamente este diretório. As próximas etapas ampliarão a captura para lotes, registro de poses e análise no mesmo ambiente. `external/manipulador/` permanece uma localização proposta para o futuro submódulo; ele ainda não foi adicionado e não é necessário para estes testes. A rede host será mantida nessa integração.
+O contexto de build é exclusivamente este diretório. As próximas etapas ampliarão a captura para lotes, registro de poses e análise no mesmo ambiente. O submódulo existente em [`../kinova-geomagic-noetic-demo/`](../kinova-geomagic-noetic-demo/) será integrado no incremento 8; ele não é necessário para estes testes. A rede host será mantida nessa integração.
