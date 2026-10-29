@@ -7,3 +7,4 @@ void p4_sparkfun_rx_error(const char *stage, const unsigned char *header, unsign
 void p4_sparkfun_empty_read();
 void p4_sparkfun_reset();
 void p4_sparkfun_probe_result(unsigned char address, unsigned char rc);
+void p4_sparkfun_feature(unsigned char sensor_id, unsigned long interval_us);

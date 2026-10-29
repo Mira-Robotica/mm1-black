@@ -1407,6 +1407,9 @@ static void hal_callback(void *cookie, sh2_AsyncEvent_t *pEvent) {
 #if defined(MM1_LAB)
   if (pEvent->eventId == SH2_SHTP_EVENT)
     p4_sparkfun_protocol_error((unsigned char)pEvent->shtpEvent);
+  if (pEvent->eventId == SH2_GET_FEATURE_RESP)
+    p4_sparkfun_feature(pEvent->sh2SensorConfigResp.sensorId,
+                       pEvent->sh2SensorConfigResp.sensorConfig.reportInterval_us);
 #endif
   // If we see a reset, set a flag so that sensors will be reconfigured.
   if (pEvent->eventId == SH2_RESET) {

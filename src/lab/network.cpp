@@ -101,14 +101,16 @@ void format_status(char *out, size_t size)
     const auto imu = p4_imu_diagnostics();
     const auto product = p4_imu_lab_info();
     snprintf(out, size,
-             "# OK STATUS stage=unit_capture wifi=%s ip=%s rssi_dbm=%ld "
+             "# OK STATUS stage=multi_report_capture wifi=%s ip=%s rssi_dbm=%ld "
              "tcp=%s port=%u hosted=%u sensors=ENABLED "
              "attempt=%lu disconnect_reason=%u uptime_ms=%lu state=%s laser=%s imu=%s "
              "imu_reports=%lu imu_resets=%lu imu_io_errors=%lu imu_decode_errors=%lu imu_sequence_gaps=%lu n_max=1 calibration=%s calibration_blocked=%u "
              "imu_init=%s imu_init_rc=%d imu_addr=0x%02X " MM1_LAB_IMU_META
              "imu_hw_resets=%lu imu_init_ms=%lu imu_part=%lu imu_fw=%u.%u.%u imu_build=%lu "
              "imu_probe_4b_rc=%d imu_probe_4a_rc=%d imu_probe_attempts=%lu imu_probe_ms=%lu "
-             "imu_probe_sda=%d imu_probe_scl=%d imu_rst_low=%d imu_rst_high=%d\n",
+             "imu_probe_sda=%d imu_probe_scl=%d imu_rst_low=%d imu_rst_high=%d "
+             "imu_epoch=%lu grv_reports=%lu mag_reports=%lu grv_sequence_gaps=%lu mag_sequence_gaps=%lu "
+             "rv_us=%lu grv_us=%lu mag_us=%lu rv_confirmed_us=%ld grv_confirmed_us=%ld mag_confirmed_us=%ld\n",
              state_name(), ip.c_str(), online ? static_cast<long>(WiFi.RSSI()) : 0L,
              server_started ? "LISTENING" : "OFF", static_cast<unsigned>(LAB_TCP_PORT),
              static_cast<unsigned>(hostedIsInitialized()),
@@ -123,7 +125,12 @@ void format_status(char *out, size_t size)
              (unsigned long)product.part, product.major, product.minor, product.patch,
              (unsigned long)product.build, imu.probe_4b_rc, imu.probe_4a_rc,
              (unsigned long)imu.probe_attempts, (unsigned long)imu.probe_elapsed_ms,
-             imu.probe_sda, imu.probe_scl, imu.rst_low, imu.rst_high);
+             imu.probe_sda, imu.probe_scl, imu.rst_low, imu.rst_high,
+             (unsigned long)imu.epoch, (unsigned long)imu.game_generation, (unsigned long)imu.mag_generation,
+             (unsigned long)product.game.sequence_gaps, (unsigned long)product.mag.sequence_gaps,
+             (unsigned long)product.rv_interval_us, (unsigned long)product.game_interval_us,
+             (unsigned long)product.mag_interval_us, (long)product.rv_confirmed_us,
+             (long)product.game_confirmed_us, (long)product.mag_confirmed_us);
 }
 
 void command(const char *line, bool from_serial)
@@ -197,11 +204,15 @@ void service_tcp()
             client.setNoDelay(true);
             client_activity = millis();
             ++connection_id;
-            char hello[1024];
+            char hello[sizeof(tx)];
             snprintf(hello, sizeof(hello),
-                     "# HELLO MM1LAB 2 stage=unit_capture boot_id=%s connection_id=%lu\n"
-                     "# META capture=single commands=STATUS,CAPTURE,CAL_IMU,IMU_RESET cal_schema=1 cal_line_max=2048 schema=2 n_max=1 timeout_ms=9000 "
-                     "imu_report=rotation_vector imu_interval_us=20000 quaternion_order=wxyz "
+                     "# HELLO MM1LAB 3 stage=multi_report_capture boot_id=%s connection_id=%lu\n"
+                     "# META capture=single commands=STATUS,CAPTURE,CAL_IMU,IMU_RESET cal_schema=1 cal_line_max=2048 schema=3 n_max=1 timeout_ms=9000 "
+                     "imu_reports=rotation_vector,game_rotation_vector,magnetic_field_calibrated "
+                     "rv_id=0x05 grv_id=0x08 mag_id=0x03 rv_requested_us=20000 grv_requested_us=20000 mag_requested_us=20000 "
+                     "intervals=nominal_acquisition confirmed_intervals=STATUS unknown_interval=-1 "
+                     "quaternion_order=wxyz grv_heading_reference=arbitrary mag_units=uT mag_frame=sensor_output "
+                     "orientation_convention=body_to_world rv_world=ENU imu_epoch_scope=boot_id "
                      MM1_LAB_IMU_META
                      "laser_axis=%.9g/%.9g/%.9g azimuth_reference=magnetic azimuth_offset_deg=0 "
                      "distance_source=laser_report laser_trim_mm=0 quaternion_norm_tolerance=0.02 "

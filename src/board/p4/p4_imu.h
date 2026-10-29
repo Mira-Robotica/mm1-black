@@ -27,6 +27,16 @@ struct P4ImuSample {
     uint8_t status, sequence;
     uint32_t generation;
 };
+struct P4ImuGameSample {
+    float w, x, y, z;
+    uint8_t status, sequence;
+    uint32_t generation;
+};
+struct P4ImuMagSample {
+    float x, y, z; // microteslas, in the configured sensor output axes.
+    uint8_t status, sequence;
+    uint32_t generation;
+};
 struct P4ImuDiagnostics {
     uint32_t generation, empty_reads, resets, io_errors, decode_errors, sequence_gaps;
     bool ready;
@@ -38,8 +48,11 @@ struct P4ImuDiagnostics {
     uint32_t probe_attempts = 0, probe_elapsed_ms = 0;
     int8_t probe_4b_rc = -1, probe_4a_rc = -1;
     int8_t probe_sda = -1, probe_scl = -1, rst_low = -1, rst_high = -1;
+    uint32_t game_generation = 0, mag_generation = 0, epoch = 0;
 };
 bool p4_imu_snapshot(P4ImuSample *sample);
+bool p4_imu_game_snapshot(P4ImuGameSample *sample);
+bool p4_imu_mag_snapshot(P4ImuMagSample *sample);
 P4ImuDiagnostics p4_imu_diagnostics();
 
 #if defined(MM1_LAB)
@@ -60,6 +73,8 @@ struct P4ImuLabInfo {
     uint8_t major, minor;
     uint16_t patch;
     uint32_t rv_interval_us, game_interval_us, mag_interval_us;
+    // Last Get Feature Response; cleared to -1 on each configuration/reset.
+    int32_t rv_confirmed_us = -1, game_confirmed_us = -1, mag_confirmed_us = -1;
 };
 P4ImuLabInfo p4_imu_lab_info();
 int p4_imu_lab_report(uint8_t sensor_id, uint32_t interval_us);

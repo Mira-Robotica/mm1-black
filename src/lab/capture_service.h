@@ -14,6 +14,13 @@ struct Sample {
     bool imu_received = false;
     bool imu_valid = false;
     const char *imu_error = "IMU_NOT_READY";
+    P4ImuGameSample grv{};
+    P4ImuMagSample mag{};
+    bool grv_received = false, mag_received = false;
+    bool grv_valid = false, mag_valid = false;
+    const char *grv_error = "IMU_NOT_READY", *mag_error = "IMU_NOT_READY";
+    uint32_t imu_epoch = 0;
+    bool imu_reset = false;
 };
 void capture_begin();
 void capture_tick();

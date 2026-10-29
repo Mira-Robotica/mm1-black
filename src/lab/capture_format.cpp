@@ -52,16 +52,36 @@ size_t format_sample(char *out, size_t size, const Sample &s)
         number(roll, sizeof(roll), s.angles.roll);
         std::snprintf(angles, sizeof(angles), "%s,%s,%s", az, inc, roll);
     }
-    const char *result = s.laser.valid && s.imu_valid ? "OK" :
-                         s.laser.valid || s.imu_valid ? "PARTIAL" : "ERROR";
+    char grv[200] = ",,,,,", mag[160] = ",,,,";
+    if (s.grv_received) {
+        char w[32] = "", x[32] = "", y[32] = "", z[32] = "";
+        number(w, sizeof(w), s.grv.w); number(x, sizeof(x), s.grv.x);
+        number(y, sizeof(y), s.grv.y); number(z, sizeof(z), s.grv.z);
+        std::snprintf(grv, sizeof(grv), "%s,%s,%s,%s,%u,%u", w, x, y, z,
+                      (unsigned)s.grv.status, (unsigned)s.grv.sequence);
+    }
+    if (s.mag_received) {
+        char x[32] = "", y[32] = "", z[32] = "";
+        number(x, sizeof(x), s.mag.x); number(y, sizeof(y), s.mag.y); number(z, sizeof(z), s.mag.z);
+        std::snprintf(mag, sizeof(mag), "%s,%s,%s,%u,%u", x, y, z,
+                      (unsigned)s.mag.status, (unsigned)s.mag.sequence);
+    }
+    const bool all = s.laser.valid && s.imu_valid && s.grv_valid && s.mag_valid;
+    const bool any = s.laser.valid || s.imu_valid || s.grv_valid || s.mag_valid;
+    const char *result = all ? "OK" : any ? "PARTIAL" : "ERROR";
     const int length = std::snprintf(out, size,
-        "request_id,sample_index,distance_m,laser_valid,laser_error,qw,qx,qy,qz,azimuth_deg,inclination_deg,roll_deg,angles_valid,angle_error,accuracy_rad,imu_status,imu_seq,imu_valid,imu_error\n"
-        "%lu,1,%s,%u,%s,%s,%s,%u,%s,%s,%u,%s\n"
-        "# DONE request_id=%lu completion=COMPLETE result=%s n_requested=1 n_rows=1 n_valid=%u n_laser_valid=%u n_imu_valid=%u code=NONE state=IDLE\n",
+        "request_id,sample_index,distance_m,laser_valid,laser_error,qw,qx,qy,qz,azimuth_deg,inclination_deg,roll_deg,angles_valid,angle_error,accuracy_rad,imu_status,imu_seq,imu_valid,imu_error,"
+        "grv_qw,grv_qx,grv_qy,grv_qz,grv_status,grv_seq,grv_valid,grv_error,"
+        "mag_x_ut,mag_y_ut,mag_z_ut,mag_status,mag_seq,mag_valid,mag_error,imu_epoch\n"
+        "%lu,1,%s,%u,%s,%s,%s,%u,%s,%s,%u,%s,%s,%u,%s,%s,%u,%s,%lu\n"
+        "# DONE request_id=%lu completion=COMPLETE result=%s n_requested=1 n_rows=1 n_valid=%u n_laser_valid=%u n_imu_valid=%u n_grv_valid=%u n_mag_valid=%u imu_reset=%u code=NONE state=IDLE\n",
         (unsigned long)s.request_id, distance, (unsigned)s.laser.valid, s.laser.error, quat, angles,
         (unsigned)(s.imu_valid && s.angles.angles_valid), s.imu_valid ? s.angles.error : "IMU_INVALID",
-        quality, (unsigned)s.imu_valid, s.imu_error, (unsigned long)s.request_id, result,
-        (unsigned)(s.laser.valid && s.imu_valid), (unsigned)s.laser.valid, (unsigned)s.imu_valid);
+        quality, (unsigned)s.imu_valid, s.imu_error,
+        grv, (unsigned)s.grv_valid, s.grv_error, mag, (unsigned)s.mag_valid, s.mag_error,
+        (unsigned long)s.imu_epoch, (unsigned long)s.request_id, result,
+        (unsigned)all, (unsigned)s.laser.valid, (unsigned)s.imu_valid,
+        (unsigned)s.grv_valid, (unsigned)s.mag_valid, (unsigned)s.imu_reset);
     return length >= 0 && (size_t)length < size ? (size_t)length : 0;
 }
 }

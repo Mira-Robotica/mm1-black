@@ -16,6 +16,9 @@ bool ready = false, initializing = false, reconfigure = false, reset_pending = f
 bool reset_seen = false, sample_valid = false, sequence_known = false;
 uint8_t address = 0x4b, last_sequence = 0;
 P4ImuSample sample{};
+P4ImuGameSample game_sample{};
+P4ImuMagSample mag_sample{};
+bool game_valid = false, mag_valid = false;
 P4ImuDiagnostics diag{};
 P4ImuLabInfo info{};
 char failure[80] = "NOT_STARTED";
@@ -51,11 +54,20 @@ void sensor(void *, sh2_SensorEvent_t *event)
         if (std::isfinite(sample.accuracy_rad) && sample.accuracy_rad >= 0)
             feedback(info.rv, v, sample.accuracy_rad);
     } else if (v.sensorId == SH2_GAME_ROTATION_VECTOR) {
+        if (game_valid && v.sequence == game_sample.sequence) return;
+        game_sample = {v.un.gameRotationVector.real, v.un.gameRotationVector.i,
+                       v.un.gameRotationVector.j, v.un.gameRotationVector.k,
+                       uint8_t(v.status & 3), v.sequence, ++diag.game_generation};
+        game_valid = true;
         feedback(info.game, v);
-    } else if (v.sensorId == SH2_MAGNETIC_FIELD_CALIBRATED &&
-               std::isfinite(v.un.magneticField.x) && std::isfinite(v.un.magneticField.y) &&
-               std::isfinite(v.un.magneticField.z)) {
-        feedback(info.mag, v);
+    } else if (v.sensorId == SH2_MAGNETIC_FIELD_CALIBRATED) {
+        if (mag_valid && v.sequence == mag_sample.sequence) return;
+        mag_sample = {v.un.magneticField.x, v.un.magneticField.y, v.un.magneticField.z,
+                      uint8_t(v.status & 3), v.sequence, ++diag.mag_generation};
+        mag_valid = true;
+        if (std::isfinite(mag_sample.x) && std::isfinite(mag_sample.y) && std::isfinite(mag_sample.z))
+            feedback(info.mag, v);
+        else info.mag.present = false;
     }
 }
 bool configure()
@@ -98,6 +110,12 @@ void p4_sparkfun_probe_result(unsigned char addr, unsigned char rc)
 }
 void p4_sparkfun_io_error() { ++diag.io_errors; }
 void p4_sparkfun_empty_read() { ++diag.empty_reads; }
+void p4_sparkfun_feature(unsigned char id, unsigned long interval)
+{
+    if (id == SH2_ROTATION_VECTOR) info.rv_confirmed_us = interval;
+    if (id == SH2_GAME_ROTATION_VECTOR) info.game_confirmed_us = interval;
+    if (id == SH2_MAGNETIC_FIELD_CALIBRATED) info.mag_confirmed_us = interval;
+}
 void p4_sparkfun_protocol_error(unsigned char event)
 {
     ++diag.decode_errors;
@@ -117,19 +135,22 @@ void p4_sparkfun_reset()
     p4_imu_lab_invalidate();
     info.autosave_rc = SH2_ERR;
     info.rv_interval_us = info.game_interval_us = info.mag_interval_us = 0;
+    info.rv_confirmed_us = info.game_confirmed_us = info.mag_confirmed_us = -1;
     reset_seen = true;
     reconfigure = true;
     // A requested hardware reset is counted when NRST is asserted.
-    if (!initializing) ++diag.resets;
+    if (!initializing) { ++diag.resets; ++diag.epoch; }
 }
 void p4_imu_lab_invalidate()
 {
     sample_valid = sequence_known = false;
+    game_valid = mag_valid = false;
     info.rv.present = info.game.present = info.mag.present = false;
 }
 
 bool p4_imu_begin(uint8_t addr)
 {
+    ++diag.epoch; // Also distinguishes failed initialization attempts in this P4 boot.
     sh2_lab_abort();
     sh2_close();
     ready = false;
@@ -244,18 +265,20 @@ void p4_imu_poll()
 }
 bool p4_imu_enable_reports()
 {
-    const int rc = p4_imu_lab_report(SH2_ROTATION_VECTOR, 20000);
-    if (rc != SH2_OK) p4_sparkfun_stage("REPORTS", rc);
-    return rc == SH2_OK;
+    for (const auto id : {SH2_ROTATION_VECTOR, SH2_GAME_ROTATION_VECTOR, SH2_MAGNETIC_FIELD_CALIBRATED}) {
+        const int rc = p4_imu_lab_report(id, 20000);
+        if (rc != SH2_OK) { p4_sparkfun_stage("REPORTS", rc); return false; }
+    }
+    return true;
 }
 int p4_imu_lab_report(uint8_t id, uint32_t interval_us)
 {
     if (sh2_lab_busy()) return SH2_ERR_OP_IN_PROGRESS;
     uint32_t *interval = nullptr;
     switch (id) {
-    case SH2_ROTATION_VECTOR: interval = &info.rv_interval_us; break;
-    case SH2_GAME_ROTATION_VECTOR: interval = &info.game_interval_us; break;
-    case SH2_MAGNETIC_FIELD_CALIBRATED: interval = &info.mag_interval_us; break;
+    case SH2_ROTATION_VECTOR: interval = &info.rv_interval_us; info.rv_confirmed_us = -1; break;
+    case SH2_GAME_ROTATION_VECTOR: interval = &info.game_interval_us; info.game_confirmed_us = -1; break;
+    case SH2_MAGNETIC_FIELD_CALIBRATED: interval = &info.mag_interval_us; info.mag_confirmed_us = -1; break;
     default: return SH2_ERR_BAD_PARAM;
     }
     sh2_SensorConfig_t config{};
@@ -266,6 +289,16 @@ int p4_imu_lab_report(uint8_t id, uint32_t interval_us)
 }
 P4ImuLabInfo p4_imu_lab_info() { return info; }
 P4ImuDiagnostics p4_imu_diagnostics() { diag.ready = ready; return diag; }
+bool p4_imu_game_snapshot(P4ImuGameSample *out)
+{
+    if (!ready || !game_valid || !out) return false;
+    *out = game_sample; return true;
+}
+bool p4_imu_mag_snapshot(P4ImuMagSample *out)
+{
+    if (!ready || !mag_valid || !out) return false;
+    *out = mag_sample; return true;
+}
 bool p4_imu_ok() { return ready; }
 bool p4_imu_snapshot(P4ImuSample *out)
 {

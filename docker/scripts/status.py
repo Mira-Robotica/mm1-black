@@ -14,7 +14,14 @@ import sys
 import time
 
 
-MAX_LINE_BYTES = 1024
+MAX_LINE_BYTES = 2048
+CAPTURE_HEADER = (
+    "request_id,sample_index,distance_m,laser_valid,laser_error,qw,qx,qy,qz,"
+    "azimuth_deg,inclination_deg,roll_deg,angles_valid,angle_error,accuracy_rad,"
+    "imu_status,imu_seq,imu_valid,imu_error,"
+    "grv_qw,grv_qx,grv_qy,grv_qz,grv_status,grv_seq,grv_valid,grv_error,"
+    "mag_x_ut,mag_y_ut,mag_z_ut,mag_status,mag_seq,mag_valid,mag_error,imu_epoch"
+)
 
 
 class ProtocolError(Exception):
@@ -86,12 +93,108 @@ def integer(values, key, low, high):
         raise ProtocolError(f"{key}: inteiro fora da faixa [{low}, {high}]: {value!r}")
 
 
-def query_status(host, port=5000, timeout=5.0, capture_id=None):
-    """Return protocol lines and fields; never retry or issue CAPTURE implicitly."""
-    # Numeric IPv4 avoids an unbounded DNS lookup before the connect timeout.
+def parse_hello(line):
+    tokens = line.split()
+    if len(tokens) < 4 or tokens[:3] != ["#", "HELLO", "MM1LAB"] or tokens[3] not in {"2", "3"}:
+        raise ProtocolError("HELLO: versão de protocolo não suportada")
+    version = tokens[3]
+    hello = fields(line, f"# HELLO MM1LAB {version}", ("stage", "boot_id", "connection_id"))
+    stages = {"2": {"network_only", "unit_capture"}, "3": {"multi_report_capture"}}
+    if hello["stage"] not in stages[version]:
+        raise ProtocolError(f"HELLO: etapa não suportada no protocolo {version}: {hello['stage']}")
+    if not re.fullmatch(r"[0-9a-fA-F]{16}", hello["boot_id"]):
+        raise ProtocolError("HELLO: boot_id deve conter 16 dígitos hexadecimais")
+    integer(hello, "connection_id", 0, 0xFFFFFFFF)
+    return hello
+
+
+def parse_sample(header, row, capture_id):
+    if header != CAPTURE_HEADER:
+        raise ProtocolError("Cabeçalho CSV de captura inesperado (requer schema 3)")
+    cells = next(csv.reader([row]))
+    if len(cells) != len(CAPTURE_HEADER.split(",")):
+        raise ProtocolError("Quantidade de colunas incorreta")
+    sample = dict(zip(CAPTURE_HEADER.split(","), cells))
+    expect(sample, "request_id", str(capture_id))
+    expect(sample, "sample_index", "1")
+    integer(sample, "imu_epoch", 0, 0xFFFFFFFF)
+    for group in ("laser", "imu", "grv", "mag", "angles"):
+        flag, error = group + "_valid", "angle_error" if group == "angles" else group + "_error"
+        if sample[flag] not in {"0", "1"}:
+            raise ProtocolError(f"CSV: flag inválida em {flag}")
+        if not sample[error] or (sample[error] == "NONE") != (sample[flag] == "1"):
+            raise ProtocolError(f"CSV: erro/validade incompatível em {error}")
+
+    def numbers(keys, valid, received):
+        # An invalid report retains finite raw values; absent/nonfinite values are empty.
+        for key in keys:
+            try:
+                ok = ((sample[key] == "" and not valid) or
+                      (received and math.isfinite(float(sample[key]))))
+            except ValueError:
+                ok = False
+            if not ok:
+                raise ProtocolError(f"CSV: valor/validade incompatível em {key}")
+
+    for group, components in (
+            ("imu", ("qw", "qx", "qy", "qz", "accuracy_rad")),
+            ("grv", ("grv_qw", "grv_qx", "grv_qy", "grv_qz")),
+            ("mag", ("mag_x_ut", "mag_y_ut", "mag_z_ut"))):
+        valid = sample[group + "_valid"] == "1"
+        received = sample[group + "_seq"] != ""
+        if valid and not received:
+            raise ProtocolError(f"CSV: {group} válido sem relatório")
+        if received:
+            integer(sample, group + "_status", 0, 3)
+            integer(sample, group + "_seq", 0, 255)
+        elif sample[group + "_status"]:
+            raise ProtocolError(f"CSV: qualidade de {group} sem relatório")
+        numbers(components, valid, received)
+    lv, iv, av = (sample[key + "_valid"] == "1" for key in ("laser", "imu", "angles"))
+    numbers(("distance_m",), lv, lv)
+    numbers(("azimuth_deg", "inclination_deg", "roll_deg"), av, iv)
+    if av and not iv:
+        raise ProtocolError("Ângulos válidos sem IMU válida")
+    if lv and float(sample["distance_m"]) <= 0:
+        raise ProtocolError("CSV: distância válida deve ser positiva")
+    if iv and float(sample["accuracy_rad"]) < 0:
+        raise ProtocolError("CSV: accuracy_rad válida deve ser não negativa")
+    for group, keys in (("imu", ("qw", "qx", "qy", "qz")),
+                        ("grv", ("grv_qw", "grv_qx", "grv_qy", "grv_qz"))):
+        if sample[group + "_valid"] == "1":
+            norm = math.hypot(*(float(sample[key]) for key in keys))
+            if abs(norm - 1) > 0.020001:  # Firmware tolerance plus decimal serialization rounding.
+                raise ProtocolError(f"CSV: norma inválida de {group}")
+    return sample
+
+
+def parse_done(line, sample, capture_id):
+    done = fields(line, "# DONE", ("request_id", "completion", "result", "n_requested", "n_rows",
+                                  "n_valid", "n_laser_valid", "n_imu_valid", "n_grv_valid",
+                                  "n_mag_valid", "imu_reset", "code", "state"))
+    for key, value in (("request_id", str(capture_id)), ("completion", "COMPLETE"),
+                       ("n_requested", "1"), ("n_rows", "1"), ("code", "NONE"), ("state", "IDLE")):
+        expect(done, key, value)
+    flags = [int(sample[group + "_valid"]) for group in ("laser", "imu", "grv", "mag")]
+    for group, flag in zip(("laser", "imu", "grv", "mag"), flags):
+        expect(done, f"n_{group}_valid", str(flag))
+    expect(done, "n_valid", str(int(all(flags))))
+    expect(done, "result", "OK" if all(flags) else "PARTIAL" if any(flags) else "ERROR")
+    if done["imu_reset"] not in {"0", "1"}:
+        raise ProtocolError("DONE: flag imu_reset inválida")
+    reset_errors = any(sample[g + "_error"] == "IMU_RESET" for g in ("imu", "grv", "mag"))
+    if reset_errors != (done["imu_reset"] == "1"):
+        raise ProtocolError("DONE: reset incompatível com os relatórios")
+    return done
+
+
+def query_status(host, port=5000, timeout=5.0, capture_id=None, record=None):
+    """Return protocol data; preserve received lines in record even on interruption."""
     host = str(ipaddress.IPv4Address(host))
     if capture_id is not None and (type(capture_id) is not int or not 1 <= capture_id <= 0xFFFFFFFF):
         raise ValueError("ID da captura deve estar entre 1 e 4294967295")
+    result = {} if record is None else record
+    result["lines"] = []
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(timeout)
         try:
@@ -99,33 +202,36 @@ def query_status(host, port=5000, timeout=5.0, capture_id=None):
         except socket.timeout as exc:
             raise TimeoutError("CONNECT: timeout ao conectar") from exc
         reader = LineReader(sock, timeout)
-        hello_line = reader.read("HELLO")
-        hello = fields(hello_line, "# HELLO MM1LAB 2", ("stage", "boot_id", "connection_id"))
-        stage = hello["stage"]
-        if stage not in {"network_only", "unit_capture"}:
-            raise ProtocolError(f"HELLO: etapa não suportada: {stage}")
-        if not re.fullmatch(r"[0-9a-fA-F]{16}", hello["boot_id"]):
-            raise ProtocolError("HELLO: boot_id deve conter 16 dígitos hexadecimais")
-        integer(hello, "connection_id", 0, 0xFFFFFFFF)
 
-        meta_line = reader.read("META")
-        meta = fields(meta_line, "# META", ("capture", "commands"))
-        expect(meta, "capture", "single" if stage == "unit_capture" else "unavailable")
+        def read(label):
+            line = reader.read(label)
+            result["lines"].append(line)
+            return line
+
+        hello = parse_hello(read("HELLO"))
+        result["hello"] = hello
+        stage = hello["stage"]
+        sensors = stage != "network_only"
+        meta = fields(read("META"), "# META", ("capture", "commands"))
+        result["meta"] = meta
+        expect(meta, "capture", "single" if sensors else "unavailable")
         if "STATUS" not in meta["commands"].split(","):
             raise ProtocolError("META: comando STATUS não anunciado")
+        if stage == "multi_report_capture" and meta.get("schema") != "3":
+            raise ProtocolError("META: protocolo 3 requer schema=3")
 
         sock.settimeout(timeout)
         try:
             sock.sendall(b"STATUS\n")
         except socket.timeout as exc:
             raise TimeoutError("SEND: timeout enviando STATUS") from exc
-        status_line = reader.read("STATUS")
-        status = fields(status_line, "# OK STATUS", (
+        status = fields(read("STATUS"), "# OK STATUS", (
             "stage", "wifi", "ip", "rssi_dbm", "tcp", "port", "hosted",
             "sensors", "attempt", "disconnect_reason", "uptime_ms",
         ))
+        result["status"] = status
         expect(status, "stage", stage)
-        expect(status, "sensors", "ENABLED" if stage == "unit_capture" else "NOT_IMPLEMENTED")
+        expect(status, "sensors", "ENABLED" if sensors else "NOT_IMPLEMENTED")
         if status["wifi"] not in {"CONFIG_REQUIRED", "RETRY_WAIT", "CONNECTING", "CONNECTED", "FAULT"}:
             raise ProtocolError("STATUS: estado Wi-Fi desconhecido")
         if status["tcp"] not in {"LISTENING", "OFF"}:
@@ -139,87 +245,26 @@ def query_status(host, port=5000, timeout=5.0, capture_id=None):
         integer(status, "rssi_dbm", -2147483648, 2147483647)
         for key in ("attempt", "disconnect_reason", "uptime_ms"):
             integer(status, key, 0, 0xFFFFFFFF)
-        result = {
-            "lines": [hello_line, meta_line, status_line],
-            "hello": hello, "meta": meta, "status": status,
-        }
         if capture_id is not None:
-            if stage != "unit_capture" or "CAPTURE" not in meta["commands"].split(","):
-                raise ProtocolError("Este firmware ainda não oferece captura unitária")
-            for key, value in (("schema", "2"), ("n_max", "1"), ("csv_header", "per_capture")):
+            if stage != "multi_report_capture" or "CAPTURE" not in meta["commands"].split(","):
+                raise ProtocolError("Captura requer firmware MM1LAB 3 com schema=3")
+            for key, value in (("schema", "3"), ("n_max", "1"), ("csv_header", "per_capture")):
                 if meta.get(key) != value:
                     raise ProtocolError(f"META: captura unitária requer {key}={value}")
             sock.settimeout(timeout)
             sock.sendall(f"CAPTURE {capture_id} 1\n".encode("ascii"))
-            ack_line = reader.read("ACK")
-            ack = fields(ack_line, "# OK CAPTURE", ("request_id", "n", "timeout_ms"))
+            ack = fields(read("ACK"), "# OK CAPTURE", ("request_id", "n", "timeout_ms"))
             expect(ack, "request_id", str(capture_id))
             expect(ack, "n", "1")
             integer(ack, "timeout_ms", 1, 9000)
             reader.timeout = int(ack["timeout_ms"])/1000 + timeout
-            header = reader.read("CSV header")
-            row = reader.read("CSV row")
-            done_line = reader.read("DONE")
-            expected = ("request_id,sample_index,distance_m,laser_valid,laser_error,qw,qx,qy,qz,"
-                        "azimuth_deg,inclination_deg,roll_deg,angles_valid,angle_error,accuracy_rad,"
-                        "imu_status,imu_seq,imu_valid,imu_error")
-            if header != expected:
-                raise ProtocolError("Cabeçalho CSV de captura inesperado")
-            cells = next(csv.reader([row]))
-            if len(cells) != len(expected.split(",")):
-                raise ProtocolError("Quantidade de colunas incorreta")
-            sample = dict(zip(expected.split(","), cells))
-            expect(sample, "request_id", str(capture_id))
-            expect(sample, "sample_index", "1")
-            for key in ("laser_valid", "imu_valid", "angles_valid"):
-                if sample[key] not in {"0", "1"}:
-                    raise ProtocolError(f"CSV: flag inválida em {key}")
-            if sample["angles_valid"] == "1" and sample["imu_valid"] != "1":
-                raise ProtocolError("Ângulos válidos sem IMU válida")
-            # Invalid reports may retain finite raw components and quality. At an
-            # angular singularity only the undefined angles are empty.
-            received = sample["imu_seq"] != ""
-            for keys, valid, optional in ((["distance_m"], sample["laser_valid"], False),
-                                (["qw", "qx", "qy", "qz", "accuracy_rad"], sample["imu_valid"], received),
-                                (["azimuth_deg", "inclination_deg", "roll_deg"], sample["angles_valid"], sample["imu_valid"] == "1")):
-                for key in keys:
-                    try:
-                        ok = ((sample[key] == "" and valid != "1") or
-                              ((valid == "1" or optional) and math.isfinite(float(sample[key]))))
-                    except ValueError:
-                        ok = False
-                    if not ok:
-                        raise ProtocolError(f"CSV: valor/validade incompatível em {key}")
-            if sample["imu_valid"] == "1" and not received:
-                raise ProtocolError("CSV: IMU válida sem relatório")
-            if received:
-                integer(sample, "imu_status", 0, 3)
-                integer(sample, "imu_seq", 0, 255)
-            elif sample["imu_status"]:
-                raise ProtocolError("CSV: qualidade sem relatório")
-            if sample["laser_valid"] == "1" and float(sample["distance_m"]) <= 0:
-                raise ProtocolError("CSV: distância válida deve ser positiva")
-            if sample["imu_valid"] == "1" and float(sample["accuracy_rad"]) < 0:
-                raise ProtocolError("CSV: accuracy_rad válida deve ser não negativa")
-            for flag, error in (("laser_valid", "laser_error"), ("imu_valid", "imu_error"),
-                                ("angles_valid", "angle_error")):
-                if not sample[error] or (sample[error] == "NONE") != (sample[flag] == "1"):
-                    raise ProtocolError(f"CSV: erro/validade incompatível em {error}")
-            done = fields(done_line, "# DONE", ("request_id", "completion", "result", "n_requested",
-                                                 "n_rows", "n_valid", "n_laser_valid", "n_imu_valid", "code", "state"))
-            expect(done, "request_id", str(capture_id))
-            expect(done, "completion", "COMPLETE")
-            expect(done, "n_requested", "1")
-            expect(done, "n_rows", "1")
-            expect(done, "code", "NONE")
-            expect(done, "state", "IDLE")
-            lv, iv = int(sample["laser_valid"]), int(sample["imu_valid"])
-            expect(done, "n_valid", str(lv*iv))
-            expect(done, "n_laser_valid", str(lv))
-            expect(done, "n_imu_valid", str(iv))
-            expect(done, "result", "OK" if lv and iv else "PARTIAL" if lv or iv else "ERROR")
-            result["lines"].extend([ack_line, header, row, done_line])
-            result["capture"] = {"sample": sample, "done": done}
+            header = read("CSV header")
+            sample = parse_sample(header, read("CSV row"), capture_id)
+            result["capture"] = {"sample": sample, "complete": False,
+                                 "orientation_session": {"boot_id": hello["boot_id"],
+                                                         "imu_epoch": int(sample["imu_epoch"])}}
+            done = parse_done(read("DONE"), sample, capture_id)
+            result["capture"].update(done=done, complete=True, imu_reset=done["imu_reset"] == "1")
         return result
 
 
@@ -255,7 +300,7 @@ def utc_now():
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="STATUS e teste opcional de captura unitária do MM1LAB 2.")
+    parser = argparse.ArgumentParser(description="STATUS e captura unitária RV/GRV/MAG do MM1LAB 3.")
     parser.add_argument("--host", type=ipv4, default=os.getenv("LAB_HOST") or None,
                         help="IPv4 da trena (ou LAB_HOST)")
     parser.add_argument("--port", type=port_number, default=os.getenv("LAB_PORT", "5000"))
@@ -278,7 +323,7 @@ def main(argv=None):
     started = time.monotonic()
     exit_code = 0
     try:
-        record.update(query_status(args.host, args.port, args.timeout, args.capture))
+        query_status(args.host, args.port, args.timeout, args.capture, record=record)
         record["ok"] = True
         for line in record["lines"]:
             print(line)

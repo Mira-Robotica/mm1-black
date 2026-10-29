@@ -10,7 +10,7 @@ import socket
 import sys
 import time
 
-from status import LineReader, ProtocolError, fields, integer, ipv4, port_number, timeout_seconds, utc_now
+from status import LineReader, ProtocolError, fields, integer, ipv4, parse_hello, port_number, timeout_seconds, utc_now
 
 INSTRUCTIONS = {
     "IDLE": "Digite iniciar (ou iniciar 4/5/6) para começar; sair para fechar o monitor.",
@@ -61,8 +61,8 @@ class Monitor:
 
     def handshake(self):
         hello = self.reader.read("HELLO")
-        h = fields(hello, "# HELLO MM1LAB 2", ("stage", "boot_id", "connection_id"))
-        if h["stage"] != "unit_capture":
+        h = parse_hello(hello)
+        if h["stage"] not in {"unit_capture", "multi_report_capture"}:
             raise ProtocolError("Firmware não oferece a etapa de sensores")
         meta = self.reader.read("META")
         m = fields(meta, "# META", ("commands", "cal_schema", "cal_line_max"))

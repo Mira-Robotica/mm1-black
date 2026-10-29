@@ -169,8 +169,8 @@ void configure_tick()
         // Attempt every restore operation even after one fails. A failure keeps
         // acquisition blocked until reboot/reset and a successful restoration.
         switch (setup) {
-        case 0: rc = p4_imu_lab_report(SH2_GAME_ROTATION_VECTOR, 0); break;
-        case 1: rc = p4_imu_lab_report(SH2_MAGNETIC_FIELD_CALIBRATED, 0); break;
+        case 0: rc = p4_imu_lab_report(SH2_GAME_ROTATION_VECTOR, 20000); break;
+        case 1: rc = p4_imu_lab_report(SH2_MAGNETIC_FIELD_CALIBRATED, 20000); break;
         case 2:
             if (have_original && p4_imu_ok()) {
                 if (start_op(Op::Restore, SH2_LAB_SET_CAL, original_mask)) return;
