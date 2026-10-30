@@ -1,5 +1,7 @@
 # Plano incremental: validação dos sensores da trena por aquisição Wi-Fi sob demanda
 
+**Prioridade atual — 29/10/2026:** a validação física dos incrementos **4, 5 e 6 está pausada**, com todos os aceites ainda pendentes preservados. O incremento **7 está congelado**, sem iniciar sua implementação ou validação por enquanto. O foco passa aos testes preliminares de movimentação do manipulador, separados da aquisição integrada com a trena: reaproveitar o Docker de `kinova-geomagic-noetic-demo` e usar `kinova_wrist_wave.py` como referência para um futuro executor de poses. As poses serão definidas na próxima etapa; ainda não implementar sua sequência. Esses testes não encerram os incrementos 4–6 nem antecipam o aceite dos incrementos 8–9. Os registros abaixo mantêm o histórico técnico; qualquer indicação anterior de prosseguimento fica subordinada a esta pausa.
+
 **Novo resultado de bancada em 13/10/2026:** os logs confirmam calibração com seis posições, uma rodada magnética, um único SAVE aceito, `dcd=SAVED save_rc=0` e restauração bem-sucedida. O cliente encerrou normalmente segundo o usuário; a captura seguinte entregou uma amostra válida com RV **3/3** e distância **0.844000041 m**. Ver [evidências de salvamento](LAB_CALIBRACAO_IMU_P4.md#ensaio-com-save-confirmado--13102026) e [captura](LAB_SENSORES_P4.md#captura-após-save-confirmado--13102026). O ensaio confirma esse fluxo no mesmo boot; persistência após desligar/ligar, estabilidade quantitativa e investigação dos 139 erros de I/O acumulados durante a calibração permanecem pendentes.
 
 
@@ -383,6 +385,8 @@ Para permitir ensaio remoto já nesta etapa, foi antecipado o subconjunto `CAPTU
 
 ### Incremento 4: calibração nativa da IMU com feedback no PC
 
+**Estado em 29/10/2026:** validação pausada; implementação e evidências anteriores preservadas, com aceite físico e persistência DCD pendentes.
+
 **Implementado em software em 01/10/2026; aceite físico inicialmente bloqueado.** Atualização de 07/10/2026: após o incremento 5, o usuário relatou calibração do magnetômetro e qualidade do Rotation Vector em 3/3. O aceite completo e a persistência DCD continuam pendentes. O histórico a seguir descreve o bloqueio anterior. Os ensaios posteriores registraram `IMU_NOT_READY` e timeouts de `GET_CAL`, inclusive na verificação da restauração (`VERIFY_RESTORE`). O [experimento de inicialização](#resultados-do-experimento-de-inicialização-da-imu) orienta a comparação de bancada; não restringir a investigação à alimentação por bateria. Executar o incremento 5 antes de retomar o aceite desta etapa. A investigação da qualidade do magnetômetro permanece para depois da estabilização da comunicação. O guia de uso, contrato e resultados de software estão em [LAB_CALIBRACAO_IMU_P4.md](LAB_CALIBRACAO_IMU_P4.md). As operações SH-2 agora são cooperativas e limitadas no lab, com verificação da máscara ME, guia de 4–6 posições, confirmações por movimento, SAVE explícito e restauração. O cliente Docker consulta enquanto aguarda entrada e registra JSONL. O comando de desabilitar autosave não tem ACK definido pelo protocolo; seu retorno de envio é registrado separadamente da confirmação de Save DCD.
 
 A calibração da IMU foi antecipada para esta etapa na revisão de 30/09/2026. Seguir o [BNO08X Sensor Calibration Procedure](datasheets/BNO08X-Sesnor-Calibration-Procedure.pdf), documento CEVA 1000-4044, revisão 1.6, fevereiro/2023, seções 2.1, 2.2 e 3 (páginas impressas 2–5). A seção de calibração do usuário reutiliza os movimentos e configurações da calibração de fábrica. Calibrar o BNO na trena montada, usando a ligação atual SDA25/SCL34/NRST49 exclusiva do lab.
@@ -459,6 +463,8 @@ Separar estados de sessão como `IDLE`, `CALIBRATING`, `READY_TO_SAVE`, `SAVING`
 
 ### Incremento 5: reset da IMU, driver SparkFun e I²C de hardware
 
+**Estado em 29/10/2026:** validação pausada; implementação e evidências anteriores preservadas, com aceite físico completo e séries de estabilidade pendentes.
+
 **Implementado em 07/10/2026; atualizado em 13/10/2026.** O laboratório usa SparkFun 1.0.6, revisão local `fd0149c+mm1.4`, I²C1 a 100 kHz em SDA25/SCL34 e NRST no GPIO49. O primeiro ensaio falhou na sondagem (`NO_ACK`, 111 ms); revisões posteriores acrescentaram diagnóstico, recuperação do barramento e proteção contra pacotes malformados. O usuário relatou calibração do magnetômetro e RV **3/3** e, posteriormente, identificou mau contato nos fios I²C e relatou inversão da alimentação. Os GPIO30/31/32 instáveis foram retirados de uso por suspeita de dano. A ligação atual, com reset conectado e espera pós-reset de 150 ms, parece mais estável segundo o usuário. O novo relato permite retomar as próximas etapas, mantendo estabilidade quantitativa e persistência DCD como verificações pendentes. Ver [integração e histórico de bancada](LAB_IMU_SPARKFUN_P4.md).
 
 O objetivo é estabilizar a inicialização e as operações de controle que bloquearam o incremento 4. Adotar a [SparkFun BNO08x Arduino Library](https://github.com/sparkfun/SparkFun_BNO08x_Arduino_Library), escolhida pelo usuário por utilizar um módulo SparkFun e pela expectativa de aproveitar modificações mais recentes no pacote SH-2. A comparação do pacote fornecido mostrou que seu `sh2.c` coincide com a base anterior, antes das extensões do lab. A troca de transporte e o reset físico ainda precisam demonstrar estabilidade nos ensaios; não há garantia de correção apenas pela troca da biblioteca. A atualização do firmware interno do BNO086 não faz parte desta etapa.
@@ -506,6 +512,8 @@ Na placa, executar séries repetidas de energização completa e de reset apenas
 
 ### Incremento 6: captura conjunta de RV, GRV e campo magnético calibrado
 
+**Estado em 29/10/2026:** validação pausada; verificações de software preservadas, com aceite de bancada pendente.
+
 **Implementado em 16/10/2026; verificado em software, com aceite físico pendente.** Escopo: ampliar o `CAPTURE` unitário do servidor TCP para adquirir e registrar, na mesma tentativa, laser, Rotation Vector, Game Rotation Vector e Magnetic Field Calibrated. A finalidade é coletar as duas estimativas de orientação e o campo magnético para os experimentos. A implementação de lotes passa ao incremento 7; nesta etapa, manter `n=1`.
 
 #### Relatórios e aquisição
@@ -546,6 +554,8 @@ Atualizar parsing, validação do cabeçalho, armazenamento e logs do cliente Do
 Comandos de uso, referências dos dados e exemplos atuais em [LAB_SENSORES_P4.md](LAB_SENSORES_P4.md) e no [cliente Docker](../docker/README.md).
 
 ### Incremento 7: protocolo e lote limitado
+
+**Estado em 29/10/2026:** congelado por enquanto; não iniciar implementação ou validação. O escopo e os critérios abaixo ficam registrados para retomada futura.
 
 Ampliar `STATUS`/`CAPTURE` e ACK/dados/DONE do schema 3 do incremento 6, preservando os três relatórios de IMU em cada linha, para lotes de 1–20 tentativas, resultado/estado do pedido, interrupções globais, diagnóstico após desconexão e recuperação limitada validada no laser real. Consolidar cabeçalho/metadados e atualizar o cliente para o contrato de lote. Preservar o atendimento da IMU mesmo quando o laser não puder iniciar outra medição com garantia de novidade.
 
