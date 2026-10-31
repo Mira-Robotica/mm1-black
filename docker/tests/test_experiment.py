@@ -164,6 +164,47 @@ class CoordinatorTests(unittest.TestCase):
             self.assertEqual(self.run_exp(), 1)
         self.assertNotIn("prepare", self.events)
 
+    def test_imu_only_preflight_requires_new_firmware_before_motion(self):
+        def server(conn):
+            conn.sendall(UNIT_HELLO + META)
+            read_command(conn)
+            conn.sendall(UNIT_STATUS)
+        with peer(server) as port:
+            self.trena = exp.TcpTrena("127.0.0.1", port, 1, use_laser=False)
+            self.assertEqual(self.run_exp(), 1)
+        self.assertNotIn("prepare", self.events)
+        self.assertIn("CAPTURE_IMU", self.journal.records[-1]["error"])
+
+    def test_imu_only_tcp_capture_is_accepted_without_distance(self):
+        sample = dict(GOOD, distance_m="", laser_valid="0", laser_error="LASER_DISABLED")
+        self.robot.poses = self.robot.poses[:1]
+        with peer(lambda c: exchange(c, response(sample, False), use_laser=False)) as port:
+            self.trena = exp.TcpTrena("127.0.0.1", port, 1, use_laser=False)
+            self.trena.preflight = lambda r: r.update(hello={"boot_id": "0123456789abcdef"})
+            self.assertEqual(self.run_exp(7), 0)
+        self.assertTrue(self.poses()[0]["accepted"])
+        self.assertFalse(self.poses()[0]["use_laser"])
+        self.assertEqual(self.journal.records[-1]["failed_captures"], 0)
+        summary = next(r for r in self.journal.records if r["record_type"] == "pose_summary")
+        self.assertFalse(summary["product_improvement_required"])
+        self.assertEqual(summary["sensor_valid_counts"], dict(laser=0, imu=1, grv=1, mag=1))
+
+    def test_imu_only_sensor_failures_still_report_and_continue(self):
+        self.trena = exp.SimulatedTrena(use_laser=False)
+        original = self.trena.capture
+        def capture(capture_id, record):
+            original(capture_id, record)
+            if capture_id <= 5:
+                record["capture"]["done"]["result"] = "PARTIAL"
+                record["capture"]["sample"].update(grv_valid="0", grv_error="GRV_TIMEOUT")
+        self.trena.capture = capture
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(exp.run_experiment(self.robot, self.trena, self.journal, {},
+                                               captures_per_pose=5), 0)
+        self.assertEqual(len(self.poses()), 15)
+        self.assertEqual(self.journal.records[-1]["failed_captures"], 5)
+        self.assertEqual(self.journal.records[-1]["poses_without_valid_capture"], ["pose_000"])
+
     def tcp_run(self, server):
         self.robot.poses = self.robot.poses[:1]
         # Test captures through real TCP; preflight separately covered above.
@@ -305,6 +346,21 @@ class OrientationTests(unittest.TestCase):
 
 
 class StorageAndCliTests(unittest.TestCase):
+    def test_imu_only_cli_runs_all_poses_without_laser_failures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "imu.jsonl"
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(exp.main(["--use-laser", "false", "--hold-sec", ".001",
+                                           "--log", str(path)]), 0)
+            rows = [json.loads(s) for s in path.read_text().splitlines()]
+        poses = [r for r in rows if r["record_type"] == "pose"]
+        self.assertEqual(len(poses), 215)
+        self.assertTrue(all(r["accepted"] and r["capture_command"] == "CAPTURE_IMU" for r in poses))
+        self.assertTrue(all(r["trena"]["capture"]["sample"]["distance_m"] == "" for r in poses))
+        self.assertFalse(rows[0]["metadata"]["configuration"]["use_laser"])
+        self.assertEqual(rows[-1]["outcome"], "complete")
+        self.assertFalse(rows[-1]["product_improvement_required"])
+
     def test_exclusive_log_and_durable_write(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "test.jsonl"
@@ -334,7 +390,7 @@ class StorageAndCliTests(unittest.TestCase):
     def test_invalid_configuration_before_motion_or_file_creation(self):
         for args in (["--captures-per-pose", "0"], ["--captures-per-pose", "21"], ["--first-capture-id", "4294967295"], ["--first-tilt-deg", "nan"],
                      ["--hold-sec", "0"], ["--execution-mode", "hardware", "--trena-mode", "simulated"],
-                     ["--host", "hostname"], ["--execution-mode", "typo"]):
+                     ["--host", "hostname"], ["--execution-mode", "typo"], ["--use-laser", "typo"]):
             with self.subTest(args=args), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 exp.main(args)
 

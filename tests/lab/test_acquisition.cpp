@@ -208,11 +208,58 @@ int main()
     reset();assert(lab::capture_start(1));tick(50);tick(120);lab::capture_cancel();
     assert(!strcmp(lab::laser_state(),"RESYNC_REQUIRED"));
     assert(fake_tx[fake_tx.size()-2]==0); // Last command turns beam off.
+    // IMU-only requests work despite a sticky laser fault, without UART commands.
+    const auto tx_before_imu = fake_tx.size();
+    assert(lab::capture_start(2, false));
+    rx(frame()); // An old distance must never enter the IMU-only sample.
+    tick(); assert(!lab::capture_ready());
+    fresh(); s=lab::capture_sample();
+    assert(lab::capture_ready() && !s.laser_requested && !s.laser.valid);
+    assert(!strcmp(s.laser.error,"LASER_DISABLED"));
+    assert(s.imu_valid && s.grv_valid && s.mag_valid);
+    assert(lab::format_sample(out,sizeof(out),s) && strstr(out,"result=OK"));
+    assert(strstr(out,"n_valid=1 n_laser_valid=0") && strstr(out,"laser_requested=0"));
+    lab::capture_cancel(); assert(fake_tx.size()==tx_before_imu);
+    assert(!strcmp(lab::laser_state(),"RESYNC_REQUIRED"));
+    // Switching back does not silently clear the laser fault.
+    assert(lab::capture_start(3));tick();fresh();
+    assert(!strcmp(lab::capture_sample().laser.error,"LASER_RESYNC_REQUIRED"));
+    // Cached reports, missing reports, reset and retries retain their semantics.
+    reset(); const auto tx_after_boot = fake_tx.size();
+    assert(lab::capture_start(1, false));
+    snapshot.generation=++diag.generation;
+    game.generation=++diag.game_generation;mag.generation=++diag.mag_generation;
+    ++diag.empty_reads;tick();tick();assert(!lab::capture_ready());
+    snapshot.generation=++diag.generation;tick();tick(1000);
+    s=lab::capture_sample();assert(s.imu_valid && !s.grv_valid && !s.mag_valid);
+    assert(lab::format_sample(out,sizeof(out),s) && strstr(out,"result=PARTIAL"));
+    lab::capture_cancel(); assert(fake_tx.size()==tx_after_boot);
+    reset();assert(lab::capture_start(1,false));tick(1000);
+    assert(lab::format_sample(out,sizeof(out),lab::capture_sample()) && strstr(out,"result=ERROR"));
+    reset();assert(lab::capture_start(1,false));++diag.epoch;tick();
+    assert(lab::capture_sample().imu_reset && lab::capture_ready());
+    assert(!strcmp(lab::capture_sample().laser.error,"LASER_DISABLED"));
+#if LAB_IMU_MAX_RETRIES > 0
+    reset();assert(lab::capture_start(1,false));++diag.io_errors;tick();fresh();
+    assert(lab::capture_ready() && lab::capture_sample().imu_valid);
+    assert(lab::capture_sample().imu_retries==1);
+#endif
+    reset();assert(lab::capture_start(1,false));lab::capture_cancel();
+    assert(!lab::capture_busy() && !strcmp(lab::laser_state(),"READY"));
+    assert(lab::capture_start(2));tick(50);tick(120);rx(frame());tick();fresh();
+    assert(lab::capture_ready() && lab::capture_sample().laser.valid);
     uint32_t id=0,count=0;
     assert(lab::parse_capture("CAPTURE 123",id,count) && id==123 && count==1);
     assert(lab::parse_capture("CAPTURE 4294967295 1",id,count));
     for (auto cmd : {"CAPTURE 0", "CAPTURE -1", "CAPTURE 4294967296", "CAPTURE 1 1 garbage", "CAPTURE 1x"})
         assert(!lab::parse_capture(cmd,id,count));
+    bool use_laser=true;
+    assert(lab::parse_capture("CAPTURE_IMU 123",id,count,&use_laser) && !use_laser && id==123 && count==1);
+    assert(lab::parse_capture("CAPTURE_IMU 4294967295 1",id,count,&use_laser) && !use_laser);
+    assert(lab::parse_capture("CAPTURE 124 1",id,count,&use_laser) && use_laser);
+    for (auto cmd : {"CAPTURE_IMU", "CAPTURE_IMU 0", "CAPTURE_IMU -1", "CAPTURE_IMU 4294967296",
+                     "CAPTURE_IMU 1 1 garbage", "CAPTURE_IMU 1x", "CAPTURE_IMUX 1"})
+        assert(!lab::parse_capture(cmd,id,count,&use_laser));
     std::cout << "Native acquisition tests passed\n";
 }
 

@@ -24,20 +24,24 @@ GOOD = dict(zip(HEADER.split(","),
                  "1,0,0,0,0,17,1,NONE,12,-3,40,0,99,1,NONE,4").split(",")))
 
 
-def response(sample=None):
+def response(sample=None, use_laser=True):
     sample = sample or GOOD
     lv, iv, gv, mv = (int(sample[g + "_valid"]) for g in ("laser", "imu", "grv", "mag"))
-    result = "OK" if lv and iv and gv and mv else "PARTIAL" if lv or iv or gv or mv else "ERROR"
+    flags = (lv, iv, gv, mv) if use_laser else (iv, gv, mv)
+    result = "OK" if all(flags) else "PARTIAL" if any(flags) else "ERROR"
     reset = int(any(sample[g + "_error"] == "IMU_RESET" for g in ("imu", "grv", "mag")))
     done = (f"# DONE request_id=7 completion=COMPLETE result={result} n_requested=1 n_rows=1 "
-            f"n_valid={lv*iv*gv*mv} n_laser_valid={lv} n_imu_valid={iv} n_grv_valid={gv} "
+            f"n_valid={int(all(flags))} n_laser_valid={lv} n_imu_valid={iv} n_grv_valid={gv} "
             f"n_mag_valid={mv} imu_reset={reset} code=NONE state=IDLE\n")
+    if not use_laser:
+        done = done.rstrip() + " laser_requested=0\n"
     row = ",".join(sample[key] for key in HEADER.split(","))
     return (HEADER + "\n" + row + "\n" + done).encode()
 
 
-def handshake(conn):
-    conn.sendall(UNIT_HELLO + META)
+def handshake(conn, use_laser=True):
+    meta = META if use_laser else META.replace(b"commands=STATUS,CAPTURE", b"commands=STATUS,CAPTURE,CAPTURE_IMU")
+    conn.sendall(UNIT_HELLO + meta)
     read_command(conn)  # Asserts exactly STATUS\n.
     conn.sendall(UNIT_STATUS)
     command = bytearray()
@@ -46,11 +50,13 @@ def handshake(conn):
         if not chunk:
             break
         command.extend(chunk)
-    assert command == b"CAPTURE 7 1\n", command
+    assert command == (b"CAPTURE 7 1\n" if use_laser else b"CAPTURE_IMU 7 1\n"), command
 
 
-def exchange(conn, body=None, ack=ACK, fragmented=False):
-    handshake(conn)
+def exchange(conn, body=None, ack=ACK, fragmented=False, use_laser=True):
+    handshake(conn, use_laser)
+    if not use_laser:
+        ack = ack.replace(b"OK CAPTURE ", b"OK CAPTURE_IMU ")
     data = ack + (response() if body is None else body)
     if fragmented:
         for byte in data.replace(b"\n", b"\r\n"):
@@ -60,6 +66,56 @@ def exchange(conn, body=None, ack=ACK, fragmented=False):
 
 
 class CaptureTests(unittest.TestCase):
+    def test_imu_only_success_and_failures(self):
+        sample = dict(GOOD, distance_m="", laser_valid="0", laser_error="LASER_DISABLED")
+        cases = [sample, dict(sample, grv_valid="0", grv_error="GRV_BAD_QUAT", grv_qw="2")]
+        cases.append(dict(cases[1], imu_valid="0", imu_error="IMU_BAD_QUAT", qw="2",
+                          angles_valid="0", angle_error="IMU_INVALID", azimuth_deg="",
+                          inclination_deg="", roll_deg="", mag_valid="0", mag_error="MAG_NONFINITE"))
+        for sample, expected in zip(cases, ("OK", "PARTIAL", "ERROR")):
+            with self.subTest(expected=expected), peer(lambda c: exchange(
+                    c, response(sample, False), use_laser=False, fragmented=True)) as port:
+                result = status.query_status("127.0.0.1", port, 1, 7, use_laser=False)
+            self.assertEqual(result["capture"]["done"]["result"], expected)
+            self.assertEqual(result["capture"]["sample"]["distance_m"], "")
+            self.assertEqual(result["capture_command"], "CAPTURE_IMU")
+            self.assertFalse(result["use_laser"])
+
+    def test_imu_only_requires_advertised_command_without_fallback(self):
+        def server(conn):
+            conn.sendall(UNIT_HELLO + META)
+            read_command(conn)
+            conn.sendall(UNIT_STATUS)
+            self.assertEqual(conn.recv(1), b"")
+        with peer(server) as port, self.assertRaisesRegex(status.ProtocolError, "CAPTURE_IMU"):
+            status.query_status("127.0.0.1", port, 1, 7, use_laser=False)
+
+    def test_imu_only_rejects_wrong_mode_and_counts(self):
+        sample = dict(GOOD, distance_m="", laser_valid="0", laser_error="LASER_DISABLED")
+        body = response(sample, False)
+        for bad in (response(), body.replace(b"laser_requested=0", b"laser_requested=1"),
+                    body.replace(b" laser_requested=0", b""), body.replace(b"n_valid=1", b"n_valid=0"),
+                    body.replace(b"LASER_DISABLED", b"LASER_TIMEOUT"),
+                    body.replace(b"n_laser_valid=0", b"n_laser_valid=1")):
+            with self.subTest(body=bad), peer(lambda c: exchange(c, bad, use_laser=False)) as port:
+                with self.assertRaises(status.ProtocolError):
+                    status.query_status("127.0.0.1", port, 1, 7, use_laser=False)
+        with peer(lambda c: exchange(c, body)) as port, self.assertRaises(status.ProtocolError):
+            status.query_status("127.0.0.1", port, 1, 7)
+
+    def test_imu_only_cli_records_mode(self):
+        sample = dict(GOOD, distance_m="", laser_valid="0", laser_error="LASER_DISABLED")
+        with tempfile.TemporaryDirectory() as directory, peer(lambda c: exchange(
+                c, response(sample, False), use_laser=False)) as port:
+            path = Path(directory) / "capture.jsonl"
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = status.main(["--host", "127.0.0.1", "--port", str(port), "--capture", "7",
+                                    "--use-laser", "false", "--log", str(path)])
+            saved = json.loads(path.read_text())
+        self.assertEqual(code, 0)
+        self.assertFalse(saved["use_laser"])
+        self.assertEqual(saved["capture"]["done"]["result"], "OK")
+
     def test_unit_stage_status_without_capture(self):
         def server(conn):
             conn.sendall(UNIT_HELLO + META)

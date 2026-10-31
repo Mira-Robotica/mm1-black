@@ -52,6 +52,34 @@ class HardwareAdapterTests(unittest.TestCase):
         self.assertAlmostEqual(state["tcp"]["quaternion_wxyz"][0], 2**-.5)
         self.assertEqual(state["joints_deg"], [.02] * 7)
 
+    def test_concurrent_cleanup_sends_stop_only_once_even_on_service_failure(self):
+        entered, release = threading.Event(), threading.Event()
+        def stop():
+            entered.set()
+            release.wait(1)
+            raise fixtures.rospy.ServiceException("SESSION_NOT_IN_CONTROL")
+        self.robot._stop.side_effect = stop
+        worker = threading.Thread(target=self.robot.stop)
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            self.robot.stop()
+            self.robot.stop()
+        finally:
+            release.set()
+            worker.join(2)
+        self.robot.stop()
+        self.robot._stop.assert_called_once()
+
+    def test_manual_stop_remains_fatal_with_named_diagnostic(self):
+        self.robot.expected_action = 1043
+        self.robot.on_action(types.SimpleNamespace(
+            handle=types.SimpleNamespace(identifier=1043,
+                action_type=fixtures.sweep.ActionType.EXECUTE_WAYPOINT_LIST),
+            action_event=fixtures.sweep.ActionEvent.ACTION_ABORT, abort_details=55))
+        with self.assertRaisesRegex(RuntimeError, "CONTROL_MANUAL_STOP"):
+            self.robot.snapshot()
+
     def test_transient_disturbance_latched_even_after_recovery(self):
         with self.assertRaisesRegex(RuntimeError, "stability"):
             with self.robot.capture_guard([0.] * 7):
