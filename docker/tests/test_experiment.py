@@ -143,16 +143,16 @@ class CoordinatorTests(unittest.TestCase):
         self.assertFalse(self.poses()[0]["exchange_complete"])
         self.assertNotIn(("move", 1), self.events)
 
-    def test_boot_or_epoch_change_stops_and_records_session(self):
+    def test_boot_or_epoch_change_records_failure_and_continues(self):
         original = self.trena.capture
         def capture(capture_id, record):
             original(capture_id, record)
             if capture_id == 2:
                 record["capture"]["orientation_session"]["imu_epoch"] = 1
         self.trena.capture = capture
-        self.assertEqual(self.run_exp(), 1)
+        self.assertEqual(self.run_exp(), 0)
         self.assertTrue(self.poses()[1]["orientation_session_changed"])
-        self.assertNotIn(("move", 2), self.events)
+        self.assertIn(("move", 2), self.events)
 
     def test_preflight_incompatible_protocol_prevents_motion(self):
         def server(conn):
@@ -165,6 +165,7 @@ class CoordinatorTests(unittest.TestCase):
         self.assertNotIn("prepare", self.events)
 
     def tcp_run(self, server):
+        self.robot.poses = self.robot.poses[:1]
         # Test captures through real TCP; preflight separately covered above.
         with peer(server) as port:
             self.trena = exp.TcpTrena("127.0.0.1", port, .2)
@@ -198,12 +199,12 @@ class CoordinatorTests(unittest.TestCase):
             self.assertFalse(thread.is_alive())
             self.assertEqual(results, [0])
 
-    def test_tcp_eof_bad_done_and_network_timeout_stop(self):
+    def test_tcp_eof_bad_done_and_network_timeout_are_reported(self):
         no_done = b"\n".join(response().split(b"\n")[:2]) + b"\n"
         for body in (no_done, response().replace(b"n_rows=1", b"n_rows=2")):
             with self.subTest(body=body):
                 self.setUp()
-                self.assertEqual(self.tcp_run(lambda c: exchange(c, body)), 1)
+                self.assertEqual(self.tcp_run(lambda c: exchange(c, body)), 0)
                 self.assertEqual(self.poses()[0]["trena"]["capture"]["sample"], GOOD)
                 self.assertFalse(self.poses()[0]["exchange_complete"])
                 self.assertNotIn(("move", 1), self.events)
@@ -211,8 +212,8 @@ class CoordinatorTests(unittest.TestCase):
         def fail(capture_id, record):
             raise TimeoutError("network timeout")
         self.trena.capture = fail
-        self.assertEqual(self.run_exp(), 1)
-        self.assertNotIn(("move", 1), self.events)
+        self.assertEqual(self.run_exp(), 0)
+        self.assertIn(("move", 1), self.events)
 
     def test_all_invalid_reports_are_saved_and_not_retried(self):
         sample = dict(GOOD)
@@ -221,7 +222,7 @@ class CoordinatorTests(unittest.TestCase):
             sample[group + "_error"] = group.upper() + "_TIMEOUT"
         sample.update(distance_m="", azimuth_deg="", inclination_deg="", roll_deg="",
                       angles_valid="0", angle_error="IMU_INVALID")
-        self.assertEqual(self.tcp_run(lambda c: exchange(c, response(sample))), 1)
+        self.assertEqual(self.tcp_run(lambda c: exchange(c, response(sample))), 0)
         row = self.poses()[0]
         self.assertTrue(row["exchange_complete"])
         self.assertEqual(row["trena"]["capture"]["done"]["result"], "ERROR")
@@ -239,6 +240,45 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(row["trena"]["capture"]["sample"]["imu_status"], "0")
         self.assertTrue(row["derived"]["rv"]["quaternion_valid"])
         self.assertIsNone(row["derived"]["robot_imu_rotation_error_deg"])
+
+
+    def test_fixed_attempts_all_failures_and_partial_success(self):
+        for count in (1, 5, 20):
+            self.setUp()
+            original = self.trena.capture
+            def capture(capture_id, record):
+                original(capture_id, record)
+                # All attempts in first pose fail. First/middle attempts of the
+                # second pose fail. Third pose succeeds, with no extra attempts.
+                if capture_id <= count or capture_id in (count + 1, count + 1 + count//2):
+                    record["capture"]["done"]["result"] = "PARTIAL"
+                    record["capture"]["sample"].update(imu_valid="0", imu_error="IMU_IO_ERROR")
+            self.trena.capture = capture
+            with redirect_stdout(io.StringIO()):
+                code = exp.run_experiment(self.robot, self.trena, self.journal, {}, captures_per_pose=count)
+            self.assertEqual(code, 0)
+            self.assertEqual([r["capture_id"] for r in self.poses()], list(range(1, 3*count+1)))
+            self.assertEqual([e for e in self.events if isinstance(e, tuple) and e[0]=="move"],
+                             [("move", 0), ("move", 1), ("move", 2)])
+            summaries = [r for r in self.journal.records if r["record_type"] == "pose_summary"]
+            self.assertEqual(summaries[0]["outcome"], "no_valid_capture")
+            self.assertEqual(summaries[2]["accepted_captures"], count)
+            self.assertEqual(self.journal.records[-1]["outcome"], "complete_with_failures")
+            self.assertIn("pose_000", self.journal.records[-1]["poses_without_valid_capture"])
+            self.assertTrue(self.journal.records[-1]["product_improvement_required"])
+            # Each attempt is persisted while stationary before the next one.
+            for index in range(1, len(self.poses())):
+                self.assertEqual(self.poses()[index]["attempt_index"], index % count + 1)
+
+    def test_all_network_attempts_fail_but_run_reaches_final_pose(self):
+        self.trena.capture = lambda *args: (_ for _ in ()).throw(TimeoutError("offline"))
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(exp.run_experiment(self.robot, self.trena, self.journal, {},
+                                               captures_per_pose=5), 0)
+        self.assertEqual(len(self.poses()), 15)
+        self.assertEqual(self.journal.records[-1]["failed_captures"], 15)
+        self.assertEqual(self.journal.records[-1]["saved_poses"], 3)
+        self.assertEqual(len(self.journal.records[-1]["poses_without_valid_capture"]), 3)
 
 
 class OrientationTests(unittest.TestCase):
@@ -286,13 +326,13 @@ class StorageAndCliTests(unittest.TestCase):
                     redirect_stdout(io.StringIO()):
                 self.assertEqual(exp.main(["--hold-sec", ".001", "--log", str(path)]), 0)
             rows = [json.loads(s) for s in path.read_text().splitlines()]
-        self.assertEqual(sum(r["record_type"] == "pose" for r in rows), 43)
+        self.assertEqual(sum(r["record_type"] == "pose" for r in rows), 215)
         self.assertEqual(rows[-1]["outcome"], "complete")
         self.assertEqual(rows[0]["metadata"]["configuration"]["execution_mode"], "simulated")
         self.assertIn("submodule_revision", rows[0]["metadata"]["provenance"])
 
     def test_invalid_configuration_before_motion_or_file_creation(self):
-        for args in (["--first-capture-id", "4294967295"], ["--first-tilt-deg", "nan"],
+        for args in (["--captures-per-pose", "0"], ["--captures-per-pose", "21"], ["--first-capture-id", "4294967295"], ["--first-tilt-deg", "nan"],
                      ["--hold-sec", "0"], ["--execution-mode", "hardware", "--trena-mode", "simulated"],
                      ["--host", "hostname"], ["--execution-mode", "typo"]):
             with self.subTest(args=args), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):

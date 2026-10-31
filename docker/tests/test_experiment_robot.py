@@ -34,6 +34,15 @@ class HardwareAdapterTests(unittest.TestCase):
         actuators = [types.SimpleNamespace(position=joint, velocity=velocity) for _ in range(7)]
         self.robot.on_feedback(types.SimpleNamespace(base=base, actuators=actuators))
 
+    def test_successful_finish_skips_shutdown_stop_but_failures_still_stop(self):
+        self.robot.stop()
+        self.robot._stop.assert_called_once()
+        self.robot._stop.reset_mock()
+        self.robot.finish()
+        self.robot.stop()
+        self.robot.stop()
+        self.robot._stop.assert_not_called()
+
     def test_snapshot_is_measured_cartesian_feedback(self):
         self.publish(joint=.02)
         state = self.robot.snapshot()
