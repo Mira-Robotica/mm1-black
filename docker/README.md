@@ -1,6 +1,6 @@
 # Cliente de bancada: STATUS e captura unitária via TCP
 
-Este diretório contém o ambiente Python iniciado no segundo incremento e ampliado até o sexto. Ele recebe `HELLO` e `META`, envia `STATUS` e mostra a resposta completa. Com `--capture ID`, também solicita uma aquisição unitária de laser, RV, GRV e campo magnético calibrado e espera seu `DONE`. A primeira integração com poses está disponível no [coordenador de experimento](EXPERIMENTO_POSES.md), reutilizando a imagem Docker Kinova. Lotes continuam congelados no incremento 7.
+Este diretório contém o ambiente Python iniciado no segundo incremento e ampliado até o sexto. Ele recebe `HELLO` e `META`, envia `STATUS` e mostra a resposta completa. Com `--capture ID`, também solicita uma aquisição unitária de laser, RV, GRV e campo magnético calibrado e espera seu `DONE`. A primeira integração com poses está disponível no [coordenador de experimento](EXPERIMENTO_POSES.md), reutilizando a imagem Docker Kinova. O coordenador executa lotes de 1–20 pedidos unitários por pose, com relatório de falhas (incremento 7).
 
 ## Testar a placa
 

@@ -1,6 +1,6 @@
 # Plano incremental: validação dos sensores da trena por aquisição Wi-Fi sob demanda
 
-**Prioridade atual — 30/10/2026:** os testes preliminares das poses do manipulador foram validados pelo usuário. Iniciar a primeira implementação do **incremento 8**, com coordenador Python, captura unitária do schema 3 e reutilização do Docker/waypoints de `kinova-geomagic-noetic-demo`. A validação física dos incrementos **4, 5 e 6 permanece pausada**, com os aceites pendentes preservados; o incremento **7 foi retomado em 31/10/2026 para retentativa limitada da IMU no mesmo CAPTURE**; lotes permanecem adiados. O novo coordenador não encerra esses aceites nem substitui o piloto integrado do incremento 9. Os registros abaixo mantêm o histórico técnico.
+**Prioridade atual — 30/10/2026:** os testes preliminares das poses do manipulador foram validados pelo usuário. Iniciar a primeira implementação do **incremento 8**, com coordenador Python, captura unitária do schema 3 e reutilização do Docker/waypoints de `kinova-geomagic-noetic-demo`. A validação física dos incrementos **4, 5 e 6 permanece pausada**, com os aceites pendentes preservados; o incremento **7 foi retomado em 31/10/2026 para retentativa limitada da IMU e lotes de CAPTUREs por pose coordenados no PC**, com continuidade após falhas de aquisição e relatório de melhoria do produto. O novo coordenador não encerra esses aceites nem substitui o piloto integrado do incremento 9. Os registros abaixo mantêm o histórico técnico.
 
 **Novo resultado de bancada em 13/10/2026:** os logs confirmam calibração com seis posições, uma rodada magnética, um único SAVE aceito, `dcd=SAVED save_rc=0` e restauração bem-sucedida. O cliente encerrou normalmente segundo o usuário; a captura seguinte entregou uma amostra válida com RV **3/3** e distância **0.844000041 m**. Ver [evidências de salvamento](LAB_CALIBRACAO_IMU_P4.md#ensaio-com-save-confirmado--13102026) e [captura](LAB_SENSORES_P4.md#captura-após-save-confirmado--13102026). O ensaio confirma esse fluxo no mesmo boot; persistência após desligar/ligar, estabilidade quantitativa e investigação dos 139 erros de I/O acumulados durante a calibração permanecem pendentes.
 
@@ -555,19 +555,25 @@ Comandos de uso, referências dos dados e exemplos atuais em [LAB_SENSORES_P4.md
 
 ### Incremento 7: protocolo e lote limitado
 
-**Estado em 31/10/2026:** retomado parcialmente, por solicitação do usuário, para retentativas de aquisição da IMU dentro do mesmo `CAPTURE` unitário. O escopo de lotes abaixo permanece para etapa futura.
+**Estado em 31/10/2026:** retentativas internas da IMU implementadas e exercitadas em hardware. Implementado também lote de 1–20 CAPTUREs independentes por pose no coordenador, padrão 5. Por decisão de implementação alinhada ao pedido de vários CAPTUREs na mesma pose, o PC controla o lote e usa o schema 3 unitário existente. A proposta original de um comando de firmware `CAPTURE id n` não foi implementada nesta entrega; fica como alternativa futura, sem ser necessária para o experimento atual.
+
+O coordenador executa a quantidade fixa mesmo após sucesso ou falhas. Cada pedido tem ID único, espera DONE ou falha limitada de transporte e salva seus dados antes do próximo pedido. O braço move uma vez por pose e permanece sob monitoramento durante cada aquisição. Após todas as tentativas, grava resumo por pose e avança mesmo se nenhuma for válida. Resultado final `complete_with_failures`, listas de poses com falhas/sem captura válida e `product_improvement_required` tornam explícitas as oportunidades de melhoria do produto. Falhas de movimento/repouso, gravação e interrupção continuam fatais. Mudanças de sessão ficam registradas e invalidam a tentativa afetada, permitindo novos pedidos sem misturar referenciais.
+
+**Aceite do lote no PC:** testes automatizados aprovados para 1/5/20 pedidos, IDs e contagens, falhas no início/meio/todas, rede e continuidade até o fim; testes de espera por DONE, gravação e monitoramento preservados. O aceite físico com múltiplos pedidos por pose permanece pendente. Ver [guia do experimento](../docker/EXPERIMENTO_POSES.md).
 
 Implementação: `LAB_IMU_MAX_RETRIES` configurável em `include/lab_config.h`, padrão 3, faixa 0–20 (0 desabilita). São tentativas adicionais após erro de I/O, compartilhadas por RV/GRV/MAG, sem reiniciar o prazo `LAB_IMU_TIMEOUT_MS` (padrão 1000 ms). Após erro, volta à drenagem e só aceita dados pendentes depois de nova leitura vazia e novas gerações. Relatórios já capturados e laser são preservados; callbacks do ciclo com erro de I/O não são aceitos. Reset, indisponibilidade e erro de decodificação não são recuperados por essa política. Não há reset automático nem repetição do laser/pedido TCP.
 
 `DONE` mantém schema 3/35 colunas e acrescenta `imu_retries`, `imu_retry_limit` e `imu_io_errors` (erros observados na etapa de aquisição da IMU, não o contador acumulado de STATUS). O cliente existente preserva os campos adicionais no JSONL. Uma recuperação pode resultar em OK; esgotamento retorna IMU_IO_ERROR nos relatórios ausentes. Se o prazo vencer antes, conserva o erro de timeout/backlog correspondente à fase.
 
-Validação de software: nove suítes nativas passaram com ASan/UBSan, incluindo recuperação, nova barreira de novidade, preservação parcial, limite de tentativas, prazo e reset durante recuperação. Configuração com 0 retentativas também verificada. Build `mm1_p4_lab` aprovado. Aceite físico das retentativas ainda pendente; firmware compilado, não gravado na placa.
+Validação de software: nove suítes nativas passaram com ASan/UBSan, incluindo recuperação, nova barreira de novidade, preservação parcial, limite de tentativas, prazo e reset durante recuperação. Configuração com 0 retentativas também verificada. Build `mm1_p4_lab` aprovado. Estado registrado antes dos ensaios físicos subsequentes; os resultados destes constam abaixo.
 
-Ampliar `STATUS`/`CAPTURE` e ACK/dados/DONE do schema 3 do incremento 6, preservando os três relatórios de IMU em cada linha, para lotes de 1–20 tentativas, resultado/estado do pedido, interrupções globais, diagnóstico após desconexão e recuperação limitada validada no laser real. Consolidar cabeçalho/metadados e atualizar o cliente para o contrato de lote. Preservar o atendimento da IMU mesmo quando o laser não puder iniciar outra medição com garantia de novidade.
+**Proposta original de lote no firmware (alternativa futura):** ampliar `STATUS`/`CAPTURE` e ACK/dados/DONE do schema 3 do incremento 6, preservando os três relatórios de IMU em cada linha, para lotes de 1–20 tentativas, resultado/estado do pedido, interrupções globais, diagnóstico após desconexão e recuperação limitada validada no laser real. Consolidar cabeçalho/metadados e atualizar o cliente para o contrato de lote. Preservar o atendimento da IMU mesmo quando o laser não puder iniciar outra medição com garantia de novidade.
 
-**Aceite:** `n=1`, `n=5` e `n=20` entregam contagens/índices corretos; valores fora de 1–20 são recusados. Injetar falha no primeiro e no meio do lote e falhas em todas as tentativas: em todos esses casos os índices vão até `n`, com erros separados e contagens corretas. Verificar que falha do laser não impede tentar a IMU e vice-versa, sem tentativas extras para obter sucessos. Distinguir `COMPLETE/ERROR` com `n` linhas de `INTERRUPTED`. Testar pedido com sensores indisponíveis, recuperação limitada, `BUSY`, ID repetido, linha longa, TCP fragmentado, prazo global, cliente lento e reconexão. Pedido aceito termina uma vez se a conexão permitir; desconexão desliga laser e impede contaminação do próximo pedido por respostas antigas. `STATUS` continua responsivo durante a espera do laser.
+**Aceite original do lote no firmware (não concluído por esta entrega):** `n=1`, `n=5` e `n=20` entregam contagens/índices corretos; valores fora de 1–20 são recusados. Injetar falha no primeiro e no meio do lote e falhas em todas as tentativas: em todos esses casos os índices vão até `n`, com erros separados e contagens corretas. Verificar que falha do laser não impede tentar a IMU e vice-versa, sem tentativas extras para obter sucessos. Distinguir `COMPLETE/ERROR` com `n` linhas de `INTERRUPTED`. Testar pedido com sensores indisponíveis, recuperação limitada, `BUSY`, ID repetido, linha longa, TCP fragmentado, prazo global, cliente lento e reconexão. Pedido aceito termina uma vez se a conexão permitir; desconexão desliga laser e impede contaminação do próximo pedido por respostas antigas. `STATUS` continua responsivo durante a espera do laser.
 
 ### Incremento 8: evolução do cliente Python e integração com poses
+
+**Atualização em 31/10/2026:** o experimento passa a usar 5 CAPTUREs por pose (configurável 1–20), schema de registro 2, resumos por pose e continuidade após falhas de aquisição. Esta política substitui a interrupção em PARTIAL/ERROR descrita no histórico abaixo. Os critérios de movimento/repouso/gravação continuam obrigatórios.
 
 Evoluir o cliente criado no incremento 2, mantendo scripts, configuração e dependências sob `./docker`. Associar os dados/metadados do incremento 6 a poses, mantendo RV, GRV e campo magnético nos logs, e implementar a sequência mover → confirmar repouso → acomodar → capturar → conferir/salvar. Usar interface simulada e adaptador ROS real do submódulo existente `kinova-geomagic-noetic-demo/`, reutilizando sua imagem Docker. Registrar a revisão desse submódulo nos metadados do ensaio e preservar o comando independente de `STATUS`. A extensão para lotes depende da retomada do incremento 7.
 
@@ -578,6 +584,31 @@ O JSONL associa pose alvo, pose medida antes/depois, ID, horários do PC, linhas
 Verificações locais: 66 testes de protocolo/coordenador/adaptador com TCP de loopback e feedback simulado, mais 18 testes de regressão da varredura, todos aprovados também no Python da imagem Kinova. O launch executou as 43 poses da prévia e gerou o JSONL completo dentro da imagem, com rede isolada, janela gráfica desativada e sem driver real; o launch de hardware foi apenas expandido, sem executá-lo. Cobrem espera por DONE, IDs, perdas de estabilidade/feedback, dados totalmente inválidos, rede, disco, interrupção e orientação (`q`/`-q`, rotação conhecida e singularidade). **Aceite físico integrado pendente**, assim como os testes de lote que dependem do incremento 7. Comandos e contrato do arquivo em [docker/EXPERIMENTO_POSES.md](../docker/EXPERIMENTO_POSES.md).
 
 **Aceite:** o script não avança na primeira resposta/ACK, espera `DONE` e confere contagens. Usa a pose real, associa os IDs corretamente, grava lotes totalmente inválidos e distingue conclusão, validade e qualidade. Recalcula os ângulos a partir do quaternion e verifica erro de rotação zero para `q` e `-q`, rotação conhecida não nula e singularidade de Euler com quaternion válido. Testar movimento não concluído, perda de estabilidade, falha no lote, interrupção de rede e erro de gravação; não executar reenvio ou avanço de pose silencioso nesses casos.
+
+
+### Ensaio integrado de 31/10/2026
+
+Na execução `experiment-2026-10-31T20-51-38.168494Z.jsonl`, o manipulador
+completou 43 poses e 215 capturas. Foram 119 capturas completas aceitas e 96
+com falhas: uma somente da IMU, 93 somente do laser e duas de ambos. Não houve
+falhas TCP registradas; 19 poses ficaram sem captura integralmente aceita.
+
+Na captura 114, RV e campo magnético tiveram `IMU_IO_ERROR` após três
+retentativas; GRV e laser foram válidos. Nas capturas 163 e 213, os três
+relatórios de IMU falharam após três retentativas. Os três relatórios foram
+válidos juntos em 212/215 tentativas. Houve 11 capturas integralmente aceitas
+com retentativas da IMU. Os dados de orientação válidos das 19 poses permanecem
+no JSONL, embora a aceitação integral também exija o laser.
+
+Na captura 121, o laser retornou `LASER_TIMEOUT`. Nas 94 capturas seguintes,
+o firmware retornou `LASER_RESYNC_REQUIRED`: após o timeout, bloqueia novas
+medições porque uma resposta atrasada não pode ser associada com segurança
+a um pedido posterior. Isso representa um timeout inicial e bloqueios
+subsequentes, não 95 timeouts independentes. A causa do timeout não foi
+determinada. O coordenador continuou como solicitado e o registro terminou
+com `complete_with_failures`. A validação física da recuperação do laser e
+dos demais critérios de aceite continua pendente.
+
 
 ### Incremento 9: validação no manipulador
 
