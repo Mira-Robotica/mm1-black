@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Increment 8: one coordinator, imported Trena client, ROS robot adapter."""
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -54,9 +55,11 @@ def provenance():
 class TcpTrena:
     def __init__(self, host, port, timeout):
         self.host, self.port, self.timeout = host, port, timeout
+        self.next_connection_at = 0.0
 
     def preflight(self, record):
         status.query_status(self.host, self.port, self.timeout, record=record)
+        self.next_connection_at = time.monotonic() + 0.2
         meta = record["meta"]
         if (record["hello"]["stage"] != "multi_report_capture" or
                 meta.get("schema") != "3" or meta.get("n_max") != "1" or
@@ -65,7 +68,12 @@ class TcpTrena:
             raise status.ProtocolError("Experiment requires schema 3, single CAPTURE")
 
     def capture(self, capture_id, record):
-        status.query_status(self.host, self.port, self.timeout, capture_id, record)
+        # Give the single-client ESP server time to observe the previous FIN.
+        time.sleep(max(0.0, self.next_connection_at - time.monotonic()))
+        try:
+            status.query_status(self.host, self.port, self.timeout, capture_id, record)
+        finally:
+            self.next_connection_at = time.monotonic() + 0.2
 
 
 class SimulatedTrena:
@@ -87,19 +95,33 @@ class SimulatedTrena:
                                  orientation_session={"boot_id": "0000000000000000", "imu_epoch": 0})
 
 
-def run_experiment(robot, trena, journal, metadata, first_capture_id=1):
-    """All failures stop; never replay a request or move after an unsaved result."""
+def run_experiment(robot, trena, journal, metadata, first_capture_id=1, captures_per_pose=1):
+    """Fixed acquisition attempts; motion, stability and storage failures remain fatal."""
+    if type(captures_per_pose) is not int or not 1 <= captures_per_pose <= 20:
+        raise ValueError("captures_per_pose must be between 1 and 20")
+    if not 1 <= first_capture_id <= 0xFFFFFFFF - len(robot.poses) * captures_per_pose + 1:
+        raise ValueError("Capture IDs exceed uint32 range")
     experiment_id = uuid.uuid4().hex
     started = time.monotonic()
     saved_poses = 0
+    failed_captures = 0
+    poses_without_valid_capture = []
+    poses_with_failures = []
     orientation_session = None
 
     def write(kind, **data):
-        journal.write(dict(record_type=kind, experiment_schema=1, experiment_id=experiment_id,
+        journal.write(dict(record_type=kind, experiment_schema=2, experiment_id=experiment_id,
                            pc_utc=status.utc_now(), **data))
 
+    def totals():
+        return dict(saved_poses=saved_poses, failed_captures=failed_captures,
+                    poses_without_valid_capture=poses_without_valid_capture,
+                    poses_with_failures=poses_with_failures,
+                    product_improvement_required=bool(failed_captures))
+
     try:
-        write("session", metadata=metadata, targets_joints_deg=robot.poses)
+        write("session", metadata=metadata, captures_per_pose=captures_per_pose,
+              targets_joints_deg=robot.poses)
         preflight = {}
         try:
             trena.preflight(preflight)
@@ -107,71 +129,118 @@ def run_experiment(robot, trena, journal, metadata, first_capture_id=1):
             write("preflight", trena=preflight)
         robot.prepare()
         for index, target in enumerate(robot.poses):
-            capture_id = first_capture_id + index
-            row = dict(pose_id=f"pose_{index:03d}", pose_index=index, capture_id=capture_id,
-                       target_joints_deg=list(target), pc_started_utc=status.utc_now(),
-                       phase="move", exchange_complete=False, accepted=False, trena={})
-            began = time.monotonic()
-            try:
-                print(f"Pose {index + 1}/{len(robot.poses)}; CAPTURE {capture_id} 1", flush=True)
-                robot.move_and_settle(target, index)
-                row["phase"] = "capture"
-                with robot.capture_guard(target):
-                    row["robot_before"] = robot.snapshot()
-                    row["capture_started_utc"] = status.utc_now()
-                    row["capture_started_monotonic_s"] = time.monotonic()
-                    try:
-                        trena.capture(capture_id, row["trena"])
-                    finally:
-                        row["capture_finished_utc"] = status.utc_now()
-                        row["capture_finished_monotonic_s"] = time.monotonic()
-                        # Preserve the protocol error even if feedback also disappears.
+            pose_id = f"pose_{index:03d}"
+            accepted_count = 0
+            sensor_valid_counts = dict(laser=0, imu=0, grv=0, mag=0)
+            for attempt in range(captures_per_pose):
+                capture_id = first_capture_id + index * captures_per_pose + attempt
+                row = dict(pose_id=pose_id, pose_index=index, capture_id=capture_id,
+                           attempt_index=attempt + 1, attempts_requested=captures_per_pose,
+                           target_joints_deg=list(target), pc_started_utc=status.utc_now(),
+                           phase="move" if attempt == 0 else "capture",
+                           exchange_complete=False, accepted=False, trena={})
+                began = time.monotonic()
+                try:
+                    if attempt == 0:
+                        print(f"Pose {index + 1}/{len(robot.poses)}: movendo e aguardando repouso", flush=True)
+                        robot.move_and_settle(target, index)
+                    row["phase"] = "capture"
+                    with robot.capture_guard(target):
+                        row["robot_before"] = robot.snapshot()
+                        print(f"Pose {index + 1}/{len(robot.poses)}; tentativa "
+                              f"{attempt + 1}/{captures_per_pose}; CAPTURE {capture_id} 1", flush=True)
+                        row["capture_started_utc"] = status.utc_now()
+                        row["capture_started_monotonic_s"] = time.monotonic()
                         try:
-                            row["robot_after"] = robot.snapshot()
-                        except Exception as exc:
-                            row["robot_after_error"] = str(exc)
-                row["phase"] = "validate"
-                capture = row["trena"]["capture"]
-                row["exchange_complete"] = capture["complete"]
-                if not capture["complete"]:
-                    raise RuntimeError("Capture ended without validated DONE")
-                row["derived"] = analyze_capture(row["trena"])
-                before = row["robot_before"].get("tcp")
-                after = row.get("robot_after", {}).get("tcp")
-                if before and after:
-                    row["derived"]["robot_rotation_drift_deg"] = rotation_error_deg(
-                        before["quaternion_wxyz"], after["quaternion_wxyz"])
-                current_session = capture["orientation_session"]
-                row["orientation_session_changed"] = (
-                    current_session["boot_id"] != preflight["hello"]["boot_id"] or
-                    (orientation_session is not None and current_session != orientation_session))
-                orientation_session = current_session
-                if row.get("robot_after_error"):
-                    raise RuntimeError(row["robot_after_error"])
-                if capture["imu_reset"] or row["orientation_session_changed"]:
-                    raise RuntimeError("IMU reset/orientation session changed; inspect before a new experiment")
-                if capture["done"]["result"] != "OK":
-                    raise RuntimeError("Capture completed with sensor result " + capture["done"]["result"])
-                row["accepted"] = True
-                row["phase"] = "saved"
-            except (Exception, KeyboardInterrupt) as exc:
-                row["error"] = str(exc) or type(exc).__name__
-                raise
-            finally:
-                row["exchange_complete"] = row["trena"].get("capture", {}).get("complete", False)
-                row["pc_finished_utc"] = status.utc_now()
-                row["elapsed_ms"] = (time.monotonic() - began) * 1000
-                write("pose", **row)
+                            trena.capture(capture_id, row["trena"])
+                        except (OSError, status.ProtocolError) as exc:
+                            row["error"] = str(exc)
+                            row["failure_kind"] = "transport_or_protocol"
+                        finally:
+                            row["capture_finished_utc"] = status.utc_now()
+                            row["capture_finished_monotonic_s"] = time.monotonic()
+                            try:
+                                row["robot_after"] = robot.snapshot()
+                            except Exception as exc:
+                                row["robot_after_error"] = str(exc)
+                        if row.get("robot_after_error"):
+                            raise RuntimeError(row["robot_after_error"])
+                    # Guard errors propagate: continuing would invalidate pose association.
+                    row["phase"] = "validate"
+                    capture = row["trena"].get("capture", {})
+                    row["exchange_complete"] = capture.get("complete", False)
+                    if not row.get("error"):
+                        if not row["exchange_complete"]:
+                            row.update(error="Capture ended without validated DONE",
+                                       failure_kind="transport_or_protocol")
+                        else:
+                            try:
+                                row["derived"] = analyze_capture(row["trena"])
+                            except (ValueError, KeyError) as exc:
+                                row.update(error=str(exc), failure_kind="data")
+                            current_session = capture["orientation_session"]
+                            row["orientation_session_changed"] = (
+                                (orientation_session is None and current_session["boot_id"] != preflight["hello"]["boot_id"]) or
+                                (orientation_session is not None and current_session != orientation_session))
+                            orientation_session = current_session
+                            if capture["imu_reset"] or row["orientation_session_changed"]:
+                                row.update(error="IMU reset/orientation session changed",
+                                           failure_kind="orientation_session")
+                            elif capture["done"]["result"] != "OK":
+                                row.update(error="Capture completed with sensor result " + capture["done"]["result"],
+                                           failure_kind="sensor")
+                            for sensor in sensor_valid_counts:
+                                sensor_valid_counts[sensor] += int(capture["sample"][sensor + "_valid"])
+                    before = row["robot_before"].get("tcp")
+                    after = row.get("robot_after", {}).get("tcp")
+                    if before and after:
+                        row.setdefault("derived", {})["robot_rotation_drift_deg"] = rotation_error_deg(
+                            before["quaternion_wxyz"], after["quaternion_wxyz"])
+                    row["accepted"] = not bool(row.get("error"))
+                    row["phase"] = "saved"
+                except (Exception, KeyboardInterrupt) as exc:
+                    row["error"] = str(exc) or type(exc).__name__
+                    row["fatal"] = True
+                    robot.stop()
+                    raise
+                finally:
+                    row["exchange_complete"] = row["trena"].get("capture", {}).get("complete", False)
+                    row["pc_finished_utc"] = status.utc_now()
+                    row["elapsed_ms"] = (time.monotonic() - began) * 1000
+                    write("pose", **row)
+                if row["accepted"]:
+                    accepted_count += 1
+                else:
+                    failed_captures += 1
+                    print(f"AVISO {pose_id}, captura {capture_id}: {row['error']}; "
+                          "falha registrada, seguindo tentativas planejadas", flush=True)
+            write("pose_summary", pose_id=pose_id, pose_index=index,
+                  captures_requested=captures_per_pose, captures_recorded=captures_per_pose,
+                  accepted_captures=accepted_count, failed_captures=captures_per_pose-accepted_count,
+                  sensor_valid_counts=sensor_valid_counts,
+                  orientation_sessions_must_be_analyzed_separately=True,
+                  product_improvement_required=accepted_count < captures_per_pose,
+                  outcome="ok" if accepted_count == captures_per_pose else
+                          "partial" if accepted_count else "no_valid_capture")
+            if accepted_count < captures_per_pose:
+                poses_with_failures.append(pose_id)
+            if accepted_count == 0:
+                poses_without_valid_capture.append(pose_id)
             saved_poses += 1
-        write("end", outcome="complete", saved_poses=saved_poses,
-              elapsed_ms=(time.monotonic() - started) * 1000)
+            print(f"Pose {index + 1}/{len(robot.poses)} concluída: "
+                  f"{accepted_count}/{captures_per_pose} capturas aceitas", flush=True)
+        write("end", outcome="complete_with_failures" if failed_captures else "complete",
+              **totals(), elapsed_ms=(time.monotonic() - started) * 1000)
+        robot.finish()
+        print(f"Experimento concluído: {saved_poses} poses; {failed_captures} capturas com falha; "
+              f"{len(poses_without_valid_capture)} poses sem captura válida. "
+              "Consulte o registro end do JSONL.", flush=True)
         return 0
     except (Exception, KeyboardInterrupt) as exc:
-        # Stop before trying to persist errors (disk itself may have failed).
         robot.stop()
         try:
             write("end", outcome="interrupted" if isinstance(exc, KeyboardInterrupt) else "failed",
-                  saved_poses=saved_poses, error=str(exc) or type(exc).__name__,
+                  **totals(), error=str(exc) or type(exc).__name__,
                   elapsed_ms=(time.monotonic() - started) * 1000)
         except OSError as log_error:
             print(f"ERRO ao gravar: {log_error}", file=sys.stderr)
@@ -190,6 +259,7 @@ def main(argv=None):
     parser.add_argument("--timeout", type=status.timeout_seconds, default=os.getenv("LAB_TIMEOUT", "5"))
     parser.add_argument("--hold-sec", type=status.timeout_seconds, default=1.0)
     parser.add_argument("--first-tilt-deg", type=float, default=120.0)
+    parser.add_argument("--captures-per-pose", type=int, default=5)
     parser.add_argument("--first-capture-id", type=int, default=1)
     parser.add_argument("--log", type=Path)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "docker/data")
@@ -203,14 +273,18 @@ def main(argv=None):
         robot = SimulatedRobot(args.first_tilt_deg, args.hold_sec)
     except ValueError as exc:
         parser.error(str(exc))
-    if not 1 <= args.first_capture_id <= 0xFFFFFFFF - len(robot.poses) + 1:
+    if not 1 <= args.captures_per_pose <= 20:
+        parser.error("captures-per-pose must be between 1 and 20")
+    if not 1 <= args.first_capture_id <= 0xFFFFFFFF - len(robot.poses) * args.captures_per_pose + 1:
         parser.error("Capture IDs for the whole sequence must fit uint32 and start at 1 or above")
-    args.log = args.log or args.output_dir / ("experiment-" + uuid.uuid4().hex + ".jsonl")
+    created_utc = datetime.now(timezone.utc)
+    args.log = args.log or args.output_dir / created_utc.strftime("experiment-%Y-%m-%dT%H-%M-%S.%fZ.jsonl")
     # Verify destination before initializing anything capable of moving hardware.
     journal = None
     try:
         journal = Journal(args.log)
         metadata = dict(configuration={k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
+                        created_utc=created_utc.isoformat(timespec="microseconds"),
                         provenance=provenance(), capture_n=1,
                         comparison_status="FRAME_ALIGNMENT_NOT_CONFIGURED")
         if args.execution_mode != "simulated":
@@ -227,7 +301,7 @@ def main(argv=None):
                     "position_tolerance", "velocity_tolerance", "max_duration")}
         trena = TcpTrena(args.host, args.port, args.timeout) if args.trena_mode == "tcp" else SimulatedTrena()
         print(f"Registro: {args.log}", flush=True)
-        return run_experiment(robot, trena, journal, metadata, args.first_capture_id)
+        return run_experiment(robot, trena, journal, metadata, args.first_capture_id, args.captures_per_pose)
     except (Exception, KeyboardInterrupt) as exc:
         print(f"ERRO ao iniciar experimento: {exc}", file=sys.stderr)
         return 130 if isinstance(exc, KeyboardInterrupt) else 1
