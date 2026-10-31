@@ -1,6 +1,6 @@
 # Plano incremental: validação dos sensores da trena por aquisição Wi-Fi sob demanda
 
-**Prioridade atual — 30/10/2026:** os testes preliminares das poses do manipulador foram validados pelo usuário. Iniciar a primeira implementação do **incremento 8**, com coordenador Python, captura unitária do schema 3 e reutilização do Docker/waypoints de `kinova-geomagic-noetic-demo`. A validação física dos incrementos **4, 5 e 6 permanece pausada**, com os aceites pendentes preservados; o incremento **7 permanece congelado**, sem implementar lotes. O novo coordenador não encerra esses aceites nem substitui o piloto integrado do incremento 9. Os registros abaixo mantêm o histórico técnico.
+**Prioridade atual — 30/10/2026:** os testes preliminares das poses do manipulador foram validados pelo usuário. Iniciar a primeira implementação do **incremento 8**, com coordenador Python, captura unitária do schema 3 e reutilização do Docker/waypoints de `kinova-geomagic-noetic-demo`. A validação física dos incrementos **4, 5 e 6 permanece pausada**, com os aceites pendentes preservados; o incremento **7 foi retomado em 31/10/2026 para retentativa limitada da IMU no mesmo CAPTURE**; lotes permanecem adiados. O novo coordenador não encerra esses aceites nem substitui o piloto integrado do incremento 9. Os registros abaixo mantêm o histórico técnico.
 
 **Novo resultado de bancada em 13/10/2026:** os logs confirmam calibração com seis posições, uma rodada magnética, um único SAVE aceito, `dcd=SAVED save_rc=0` e restauração bem-sucedida. O cliente encerrou normalmente segundo o usuário; a captura seguinte entregou uma amostra válida com RV **3/3** e distância **0.844000041 m**. Ver [evidências de salvamento](LAB_CALIBRACAO_IMU_P4.md#ensaio-com-save-confirmado--13102026) e [captura](LAB_SENSORES_P4.md#captura-após-save-confirmado--13102026). O ensaio confirma esse fluxo no mesmo boot; persistência após desligar/ligar, estabilidade quantitativa e investigação dos 139 erros de I/O acumulados durante a calibração permanecem pendentes.
 
@@ -555,7 +555,13 @@ Comandos de uso, referências dos dados e exemplos atuais em [LAB_SENSORES_P4.md
 
 ### Incremento 7: protocolo e lote limitado
 
-**Estado em 29/10/2026:** congelado por enquanto; não iniciar implementação ou validação. O escopo e os critérios abaixo ficam registrados para retomada futura.
+**Estado em 31/10/2026:** retomado parcialmente, por solicitação do usuário, para retentativas de aquisição da IMU dentro do mesmo `CAPTURE` unitário. O escopo de lotes abaixo permanece para etapa futura.
+
+Implementação: `LAB_IMU_MAX_RETRIES` configurável em `include/lab_config.h`, padrão 3, faixa 0–20 (0 desabilita). São tentativas adicionais após erro de I/O, compartilhadas por RV/GRV/MAG, sem reiniciar o prazo `LAB_IMU_TIMEOUT_MS` (padrão 1000 ms). Após erro, volta à drenagem e só aceita dados pendentes depois de nova leitura vazia e novas gerações. Relatórios já capturados e laser são preservados; callbacks do ciclo com erro de I/O não são aceitos. Reset, indisponibilidade e erro de decodificação não são recuperados por essa política. Não há reset automático nem repetição do laser/pedido TCP.
+
+`DONE` mantém schema 3/35 colunas e acrescenta `imu_retries`, `imu_retry_limit` e `imu_io_errors` (erros observados na etapa de aquisição da IMU, não o contador acumulado de STATUS). O cliente existente preserva os campos adicionais no JSONL. Uma recuperação pode resultar em OK; esgotamento retorna IMU_IO_ERROR nos relatórios ausentes. Se o prazo vencer antes, conserva o erro de timeout/backlog correspondente à fase.
+
+Validação de software: nove suítes nativas passaram com ASan/UBSan, incluindo recuperação, nova barreira de novidade, preservação parcial, limite de tentativas, prazo e reset durante recuperação. Configuração com 0 retentativas também verificada. Build `mm1_p4_lab` aprovado. Aceite físico das retentativas ainda pendente; firmware compilado, não gravado na placa.
 
 Ampliar `STATUS`/`CAPTURE` e ACK/dados/DONE do schema 3 do incremento 6, preservando os três relatórios de IMU em cada linha, para lotes de 1–20 tentativas, resultado/estado do pedido, interrupções globais, diagnóstico após desconexão e recuperação limitada validada no laser real. Consolidar cabeçalho/metadados e atualizar o cliente para o contrato de lote. Preservar o atendimento da IMU mesmo quando o laser não puder iniciar outra medição com garantia de novidade.
 

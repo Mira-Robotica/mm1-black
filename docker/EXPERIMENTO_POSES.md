@@ -8,8 +8,7 @@ processo/servidor adicional. A comunicação com o driver usa ROS; com a Trena,
 TCP. O Compose reutiliza a imagem `kinova-geomagic-noetic:demo` existente e
 monta o código atual dos dois repositórios, sem precisar reconstruí-la.
 
-Esta versão usa exclusivamente **`CAPTURE <id> 1` / schema 3**. O incremento 7
-continua congelado: não há lotes de firmware nem reenvios. São 43 capturas,
+Esta versão usa exclusivamente **`CAPTURE <id> 1` / schema 3**. O incremento 7 foi retomado para recuperação da IMU; não há lotes de firmware nem reenvios. São 43 capturas,
 uma em cada parada, incluindo zero inicial, preparação de J7 e retorno final.
 O protocolo independente de `STATUS` e o monitor de calibração continuam disponíveis.
 
@@ -179,5 +178,15 @@ foram conferidos. A expansão do launch de hardware foi verificada sem iniciar
 o driver. A janela gráfica e a integração física não foram exercitadas aqui.
 
 O aceite físico integrado permanece pendente. Incrementos 4–6 continuam com
-validação pausada e o incremento 7 continua congelado. Não há firmware novo,
+validação pausada e os lotes do incremento 7 permanecem adiados. Não há firmware novo,
 lotes, média de repetições nem calibração de referenciais nesta entrega.
+
+## Retentativas da IMU no firmware (incremento 7, 31/10/2026)
+
+Configure `LAB_IMU_MAX_RETRIES` em `include/lab_config.h` e recompile/grave
+o firmware. Padrão 3; faixa 0–20; 0 recupera o comportamento sem retentativa.
+Cada erro de I/O observado pode abrir uma nova tentativa, dentro do mesmo
+CAPTURE e do prazo original da IMU. O braço continua sob monitoramento de
+repouso enquanto aguarda DONE. O JSONL preserva `capture.done.imu_retries`,
+`imu_retry_limit` e `imu_io_errors`. Os contadores permitem identificar uma
+captura recuperada mesmo quando `result=OK`. Lotes permanecem adiados.
