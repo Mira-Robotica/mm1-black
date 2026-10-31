@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "lab/capture_service.h"
+#include "lab/settings.h"
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -119,11 +120,33 @@ int main()
         reset();measure();
         if(failure==0) ++diag.resets;
         if(failure==1) diag.ready=false;
-        if(failure==2) ++diag.io_errors;
+        if(failure==2) {
+            for (int i=0;i<LAB_IMU_MAX_RETRIES;++i) { ++diag.io_errors; tick(); assert(!lab::capture_ready()); }
+            ++diag.io_errors;
+        }
         if(failure==3) ++diag.decode_errors;
         tick(failure==4 ? 1000 : 5);
         s=lab::capture_sample(); assert(lab::capture_ready() && s.laser.valid && !s.imu_valid);
     }
+#if LAB_IMU_MAX_RETRIES > 0
+    // Recovery preserves already acquired RV, but requires a new drain barrier.
+    reset();measure();++diag.empty_reads;tick();
+    snapshot.generation=++diag.generation;tick();
+    ++diag.io_errors; game.generation=++diag.game_generation;tick();
+    assert(!lab::capture_ready() && lab::capture_sample().imu_valid);
+    assert(!lab::capture_sample().grv_received);
+    ++diag.empty_reads;tick();tick();assert(!lab::capture_ready());
+    game.generation=++diag.game_generation;mag.generation=++diag.mag_generation;tick();
+    assert(lab::capture_ready() && lab::capture_sample().grv_valid);
+    assert(lab::capture_sample().imu_retries==1 && lab::capture_sample().imu_io_errors==1);
+    assert(lab::format_sample(out,sizeof(out),lab::capture_sample()));
+    assert(strstr(out,"imu_retries=1") && strstr(out,"imu_io_errors=1"));
+    // Retrying does not renew the original IMU deadline or hide a reset.
+    reset();measure();tick(900);++diag.io_errors;tick();tick(100);
+    assert(lab::capture_ready() && !lab::capture_sample().imu_valid);
+    reset();measure();++diag.io_errors;tick();++diag.epoch;tick();
+    assert(lab::capture_ready() && lab::capture_sample().imu_reset);
+#endif
     reset();measure(); snapshot={h,0,h,0,.02f,3,255,0};fresh();
     s=lab::capture_sample(); assert(s.imu_valid && !s.angles.angles_valid);
     assert(lab::format_sample(out,sizeof(out),s)); assert(strstr(out,"ANGLE_SINGULARITY"));
