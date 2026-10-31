@@ -37,6 +37,9 @@ class SimulatedRobot:
     def capture_guard(self, target):
         yield
 
+    def finish(self):
+        pass
+
     def stop(self):
         pass
 
@@ -81,11 +84,20 @@ def hardware_robot():
     class HardwareRobot(KinovaSphericalSweep):
         def __init__(self):
             # Set before subscriptions, which can invoke callbacks immediately.
+            self.experiment_complete = False
             self.measured = None
             self.capture_target = None
             self.capture_error = None
             self.previous_received = None
             super().__init__()
+
+        def finish(self):
+            # Only called after all settled captures and the final journal write.
+            self.experiment_complete = True
+
+        def stop(self):
+            if not self.experiment_complete:
+                super().stop()
 
         def on_feedback(self, message):
             super().on_feedback(message)
