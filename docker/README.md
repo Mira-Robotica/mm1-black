@@ -50,6 +50,15 @@ docker compose -f docker/compose.yaml run --rm status --host 192.168.0.10 --capt
 
 Use o IP atual da placa. O cliente consulta `STATUS`, envia `CAPTURE 1 1` e espera ACK, cabeçalho CSV, uma linha e `DONE`. Não repete medições automaticamente. A opção recebe um ID positivo de 32 bits; cada execução abre outra conexão e pode reutilizar o mesmo ID. A camada atual só aceita `n=1`.
 
+Para adquirir apenas RV, GRV e campo magnético, acrescente **`--use-laser false`**
+ao comando acima. Isso envia `CAPTURE_IMU 1 1` e requer o firmware atualizado
+que anuncia `CAPTURE_IMU` em META. A distância fica vazia, com
+`laser_error=LASER_DISABLED` e `DONE.laser_requested=0`; `OK` considera apenas
+os três relatórios solicitados. `--use-laser true` é o padrão e preserva
+a captura completa. Reconstrua a imagem deste cliente após atualizar os scripts.
+No [experimento com poses](EXPERIMENTO_POSES.md#capturar-somente-a-imu), o parâmetro
+correspondente é `use_laser:=false`, sem necessidade de reconstruir a imagem Kinova.
+
 A saída conserva distância original, quaternion/ângulos/qualidade do RV, quaternion/qualidade do GRV e componentes XYZ/qualidade do campo magnético calibrado em µT. Cada relatório tem validade/erro e sequência próprios, e até a falha de todos produz uma linha. Os ângulos continuam derivados somente do RV; o heading do GRV é arbitrário e não é realinhado ao norte. `n_imu_valid` conta RV; `n_grv_valid` e `n_mag_valid` contam os novos relatórios; `n_valid` e `result=OK` exigem os quatro resultados válidos. Singularidades podem deixar somente alguns ângulos vazios; quaternion/qualidade válidos são preservados. O JSONL em `docker/data/capture.jsonl` registra as linhas CSV e os campos interpretados, além dos horários da transação no PC. Ainda não há um arquivo CSV de poses do manipulador.
 
 Os metadados preservam IDs, unidades/referenciais, intervalos nominais e a identificação do driver. `STATUS` registra intervalos solicitados e confirmados pelo sensor (`-1` se ainda desconhecidos), além dos contadores por relatório. Os 50 Hz nominais não comprovam a taxa real entregue.

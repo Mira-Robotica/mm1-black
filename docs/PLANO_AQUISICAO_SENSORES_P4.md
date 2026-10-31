@@ -575,6 +575,34 @@ Validação de software: nove suítes nativas passaram com ASan/UBSan, incluindo
 
 **Atualização em 31/10/2026:** o experimento passa a usar 5 CAPTUREs por pose (configurável 1–20), schema de registro 2, resumos por pose e continuidade após falhas de aquisição. Esta política substitui a interrupção em PARTIAL/ERROR descrita no histórico abaixo. Os critérios de movimento/repouso/gravação continuam obrigatórios.
 
+**Seleção de sensores — 31/10/2026:** implementado `use_laser:=true|false`
+(padrão `true`; CLI Python `--use-laser false`). O modo sem laser envia o novo
+comando TCP/serial `CAPTURE_IMU <id> [1]`, parte da evolução do protocolo do
+incremento 7. Requer firmware atualizado e anúncio em `META.commands`,
+verificado antes dos movimentos; não faz fallback para `CAPTURE`.
+Mantém schema 3/35 colunas, com distância vazia, `laser_valid=0`,
+`laser_error=LASER_DISABLED` e `DONE.laser_requested=0`. `OK`/`n_valid` e a
+aceitação da tentativa consideram RV/GRV/MAG, preservando os critérios de sessão,
+repouso e gravação. O modo fica explícito no JSONL e nos resumos; ausência
+intencional da distância não gera falha ou indicação de melhoria do produto.
+
+O firmware inicia diretamente a barreira de novidade da IMU, sem acionar ou
+esperar o laser, preservando prazo, retentativas e detecção de reset. Pode
+capturar IMU mesmo com `LASER_RESYNC_REQUIRED`, sem limpar esse bloqueio.
+`CAPTURE` permanece disponível com seu comportamento original e
+`DONE.laser_requested=1`. A seleção não altera waypoints, velocidades, espera,
+quantidade de tentativas ou continuidade após falhas reais dos sensores.
+Motivação: o usuário relata orientações sem superfície adequada para reflexão;
+essa é uma hipótese para o timeout observado, não uma causa confirmada pelo log.
+O ensaio de orientação deve poder prosseguir sem depender de medidas de distância.
+Verificação: 77 testes Python, nove suítes nativas com ASan/UBSan e build
+`mm1_p4_lab` aprovados. Launch ROS na imagem Kinova, com rede isolada, sem driver
+real e sem janela, completou 43 poses/215 capturas sintéticas no modo sem laser,
+com resultado `complete`. Não houve gravação na placa nem movimentação física.
+Aceite físico deste modo pendente; comandos e contrato em
+[EXPERIMENTO_POSES.md](../docker/EXPERIMENTO_POSES.md#capturar-somente-a-imu) e
+[LAB_SENSORES_P4.md](LAB_SENSORES_P4.md#captura-sem-laser--31102026).
+
 Evoluir o cliente criado no incremento 2, mantendo scripts, configuração e dependências sob `./docker`. Associar os dados/metadados do incremento 6 a poses, mantendo RV, GRV e campo magnético nos logs, e implementar a sequência mover → confirmar repouso → acomodar → capturar → conferir/salvar. Usar interface simulada e adaptador ROS real do submódulo existente `kinova-geomagic-noetic-demo/`, reutilizando sua imagem Docker. Registrar a revisão desse submódulo nos metadados do ensaio e preservar o comando independente de `STATUS`. A extensão para lotes depende da retomada do incremento 7.
 
 **Estado em 30/10/2026 — primeira implementação:** coordenador em `docker/scripts/experiment.py`, módulos de orientação e adaptação do robô, Compose próprio reutilizando a imagem Kinova e launch ROS em `docker/ros/mm1_experiment`. O cliente TCP é importado no processo coordenador; driver Kortex e RViz opcional são processos separados no mesmo contêiner. A sequência compartilhada tem 43 paradas e uma captura `CAPTURE <id> 1` em cada uma. Mantém J7=270°, política de duração e espera de 1 s da varredura validada.
@@ -609,6 +637,29 @@ determinada. O coordenador continuou como solicitado e o registro terminou
 com `complete_with_failures`. A validação física da recuperação do laser e
 dos demais critérios de aceite continua pendente.
 
+
+### Dois ensaios concluídos somente com IMU — 31/10/2026
+
+O usuário relatou dois experimentos concluídos com `use_laser:=false`,
+confirmados nos arquivos `experiment-2026-10-31T22-52-45.674363Z.jsonl` e
+`experiment-2026-10-31T23-15-00.148218Z.jsonl`. Cada um completou 43 poses,
+215 tentativas e 202 capturas aceitas, sem pose desprovida de captura válida,
+com encerramento `complete_with_failures`.
+
+No primeiro, houve 13 falhas de IMU por I/O. No segundo, houve 11 falhas de
+IMU por I/O, uma por decodificação e um EOF antes do HELLO na captura 15.
+A continuidade planejada após falhas individuais funcionou em ambos.
+O log de terminal da segunda execução registra duas mensagens de
+`uninitialized ServerGoalHandle` durante o primeiro movimento, antes das
+capturas. A primeira pose teve 5/5 capturas aceitas; a execução terminou
+normalmente. O aviso permanece pendente no driver Kortex, sem prejuízo à
+conclusão observado nesse ensaio; o log não permite identificar o evento
+exato que o disparou nem atribuí-lo a perda de controle.
+
+O resultado confirma o fluxo físico do modo somente IMU e dos lotes por pose,
+sem encerrar os demais aceites dos incrementos 7/8/9 ou as validações pausadas
+de 4/5/6. Detalhes e distribuição das falhas em
+[EXPERIMENTO_POSES.md](../docker/EXPERIMENTO_POSES.md#dois-experimentos-concluídos-somente-com-imu--31102026).
 
 ### Incremento 9: validação no manipulador
 

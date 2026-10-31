@@ -12,7 +12,8 @@ Por padrão são **5 CAPTUREs por pose**, configuráveis de 1 a 20. Isso gera
 que a primeira captura funcione, as demais são executadas e preservadas. Não
 há tentativas extras além da quantidade configurada para buscar um sucesso.
 
-O lote é coordenado no PC: cada pedido é `CAPTURE <id> 1` do schema 3 existente,
+O lote é coordenado no PC: cada pedido é `CAPTURE <id> 1` (ou `CAPTURE_IMU <id> 1`
+com laser desabilitado) do schema 3,
 com ID diferente e nova conexão. Esta decisão substitui, para este experimento,
 a proposta de um único comando `CAPTURE <id> n`. Não é necessário atualizar o
 firmware para usar vários pedidos por pose. A retentativa interna da IMU requer
@@ -64,10 +65,47 @@ agora também usa 5. `start_rviz:=false` desativa a janela e mantém o movimento
 real quando `execution_mode:=hardware`. O launch encerra após a pose final.
 Não execute outro controlador ou cliente TCP da Trena simultaneamente.
 
+### Capturar somente a IMU
+
+Quando a distância não fizer parte do ensaio, use **`use_laser:=false`**:
+
+```bash
+docker compose -f docker/compose.experiment.yaml run --rm experiment \
+  roslaunch mm1_experiment experiment.launch \
+  execution_mode:=hardware robot_ip:=192.168.1.10 \
+  trena_host:=150.164.212.184 captures_per_pose:=5 use_laser:=false
+```
+
+Use os IPs atuais. **Recompile e grave o firmware `mm1_p4_lab` atualizado antes
+desse uso**: o novo comando `CAPTURE_IMU <id> 1` precisa aparecer em `META.commands`.
+Se não aparecer, o coordenador encerra na verificação inicial, antes dos movimentos,
+com instrução de atualizar o firmware. Não substitui silenciosamente esse comando
+por `CAPTURE`. A imagem do experimento não precisa ser reconstruída, pois monta
+o código do checkout.
+
+O padrão é `use_laser:=true`, que mantém a captura de distância e IMU. A opção
+também funciona na prévia RViz e na simulação; em Python, use `--use-laser false`.
+O modo vale para toda a execução e é salvo na configuração, nas tentativas e nos
+resumos por pose, junto do comando enviado.
+
+Sem laser, o firmware não acende o feixe nem dispara medição: inicia diretamente
+a barreira de novidade da IMU e busca RV, GRV e campo magnético calibrado. Mantém
+prazo, retentativas e detecção de reset. Não é necessário obter uma superfície
+refletora. `LASER_RESYNC_REQUIRED` anterior não impede a captura somente da IMU;
+esse modo **não limpa nem recupera** o estado do laser para usos posteriores.
+
+A distância fica vazia, `laser_valid=0`, `laser_error=LASER_DISABLED` e
+`DONE.laser_requested=0`. Essa ausência intencional não conta como falha:
+`result=OK`/`n_valid=1` exigem somente os três relatórios da IMU válidos. Erros reais
+da IMU ou da rede continuam registrados, mantendo a continuidade do experimento.
+Ângulos derivados continuam usando o eixo geométrico informado em `META.laser_axis`,
+mesmo sem emitir o feixe; o alinhamento dos referenciais continua pendente.
+
 | Parâmetro | Padrão / efeito |
 | --- | --- |
 | `execution_mode` | `rviz`; `hardware` movimenta o robô |
 | `captures_per_pose` | 5, entre 1 e 20 |
+| `use_laser` | `true`; `false` seleciona `CAPTURE_IMU`, sem distância |
 | `trena_mode` | `tcp` no hardware, `simulated` na prévia |
 | `trena_host`, `trena_port`, `timeout` | IPv4; 5000; 5 s por etapa de rede |
 | `start_rviz`, `start_driver`, `vision` | `true` |
@@ -126,7 +164,8 @@ O JSONL usa **`experiment_schema=2`**, com:
   gravados), `failed_captures`, `poses_with_failures` e
   `poses_without_valid_capture`, além de `product_improvement_required`.
 
-`accepted` exige transação concluída, quatro sensores válidos e continuidade
+`accepted` exige transação concluída, todos os resultados solicitados válidos
+(laser/RV/GRV/MAG ou apenas RV/GRV/MAG com `use_laser=false`) e continuidade
 verificada da sessão naquela tentativa. Uma captura parcial pode conter
 orientação útil mesmo sem distância: os dados e as contagens individuais são
 preservados para a análise. `no_valid_capture` significa nenhuma tentativa
@@ -146,7 +185,7 @@ Os ângulos são recalculados com `META.laser_axis`; a comparação robô–IMU 
 
 ## CAPTUREs versus retentativas da IMU
 
-Cada CAPTURE inicia outra aquisição de laser e IMU, tem seu próprio prazo e
+Cada CAPTURE inicia outra aquisição dos sensores selecionados, tem seu próprio prazo e
 produz outra amostra. Isso permite medir dispersão e taxa de falhas por pose.
 As retentativas internas tratam erros de I/O durante **uma** captura: preservam
 laser e relatórios já obtidos, e buscam os ausentes dentro do prazo original.
@@ -159,14 +198,48 @@ internas cada, mas cada captura ainda respeita o prazo original da IMU.
 
 ## Verificação
 
+### Parada reportada na captura 213 (ensaio somente IMU)
+
+O log do ensaio enviado após a implementação de `CAPTURE_IMU` chegou à pose
+43/43, tentativa 3/5, e terminou com `ACTION_ABORT`, `abort_details=55`
+(`CONTROL_MANUAL_STOP`, conforme o enum Kortex local). Os Stop de encerramento
+foram recusados com `SESSION_NOT_IN_CONTROL` (130). Isso é uma ocorrência do
+controle do braço, separada dos resultados ERROR das capturas da IMU. O log não
+identifica a origem da parada nem comprova se houve intervenção pelo Web App,
+botões ou outro cliente; também não permite atribuir a perda de controle a
+uma causa específica.
+
+O coordenador agora compartilha uma única tentativa de Stop entre watchdog,
+tratamento de exceções e shutdown, inclusive quando o serviço recusa a sessão.
+O diagnóstico de código 55 inclui seu nome. A parada permanece fatal: não há
+retomada automática nem tentativa de tomar controle de outra sessão.
+
+As mensagens `uninitialized ServerGoalHandle` vêm dos action servers de
+trajetória do driver Kortex: no tratamento de ACTION_ABORT, consultam
+`m_goal.getGoalStatus()` antes de testar se há trajetória em execução. Nosso
+experimento envia ações por serviço, sem criar um goal desses action servers.
+Esse diagnóstico secundário do driver ainda pode aparecer em aborts; eliminar
+Stop duplicado reduz as chamadas de encerramento, mas não corrige esse caminho
+C++ do driver. A origem da parada/perda de controle precisa ser observada no
+próximo ensaio físico. Testes do adaptador cobrem parada concorrente, recusa do
+serviço e preservação do caráter fatal de CONTROL_MANUAL_STOP.
+
+Verificação do modo sem laser em 31/10/2026: 77 testes Python e nove suítes
+nativas com ASan/UBSan aprovados; build `mm1_p4_lab` aprovado. O launch ROS na
+imagem Kinova completou 43 poses e 215 capturas sintéticas aceitas com
+`use_laser:=false`, `end.outcome=complete` e distância ausente. Esse teste usou
+rede isolada, driver real e janela RViz desativados, com tempos de prévia
+reduzidos somente para o teste. Firmware não gravado e aceite físico pendente.
+
 ```bash
 python3 -m unittest discover -s docker/tests -v
 ```
 
 Cobertura: 1/5/20 pedidos, IDs, espera por DONE, falhas iniciais/intermediárias/
 totais, continuidade, reset/sessão, rede, armazenamento, movimento e repouso.
-Os testes usam simulação e sockets de loopback. O aceite físico do fluxo com
-vários pedidos permanece pendente. Em 31/10/2026, o ensaio anterior com um pedido
+Os testes usam simulação e sockets de loopback. O fluxo físico com vários pedidos
+e somente IMU foi concluído nos dois ensaios registrados abaixo; os demais
+critérios de aceite continuam pendentes. Em 31/10/2026, o ensaio anterior com um pedido
 por pose chegou a 28 capturas válidas; recuperou erros na captura 6 (2 retentativas)
 e 26 (1), e encerrou na 29 por 4 erros de I/O com 3 retentativas esgotadas.
 
@@ -222,3 +295,43 @@ subsequentes, não 95 timeouts independentes. A causa do timeout não foi
 determinada. O coordenador continuou como solicitado e o registro terminou
 com `complete_with_failures`. A validação física da recuperação do laser e
 dos demais critérios de aceite continua pendente.
+
+
+### Dois experimentos concluídos somente com IMU — 31/10/2026
+
+O usuário relatou duas execuções concluídas com `use_laser:=false`. Os JSONL
+locais confirmam os resultados abaixo; o log de terminal enviado corresponde
+à segunda execução. Em ambas, o braço percorreu todas as 43 poses, com cinco
+tentativas em cada uma, e todas as poses tiveram pelo menos uma captura aceita.
+
+| Arquivo JSONL | Tentativas / aceitas | Falhas de aquisição | Encerramento |
+| --- | --- | --- | --- |
+| `experiment-2026-10-31T22-52-45.674363Z.jsonl` | 215 / 202 | 13 de sensor | `complete_with_failures` |
+| `experiment-2026-10-31T23-15-00.148218Z.jsonl` | 215 / 202 | 12 de sensor e 1 de transporte | `complete_with_failures` |
+
+Na primeira execução, as 13 falhas de sensor foram `IMU_IO_ERROR` nos três
+relatórios. Na segunda, a captura 15 falhou com EOF antes de completar o HELLO:
+não há amostra para atribuir essa ocorrência à IMU. As capturas 57, 84, 92, 99,
+114, 117, 148, 159, 163, 167 e 210 retornaram `IMU_IO_ERROR` nos três relatórios;
+a captura 100 retornou `IMU_DECODE_ERROR`. As falhas foram registradas e a
+sequência continuou, conforme a política do experimento. Não houve pose sem
+captura válida nem interrupção fatal nessas duas execuções. Cada execução
+preservou uma única sessão de orientação entre as amostras recebidas.
+
+No log da segunda execução, às `1793488506.058733541` e
+`1793488506.058773176` (tempo ROS), apareceram duas mensagens
+`Attempt to get goal status on an uninitialized ServerGoalHandle or one that
+has no ActionServer associated with it.` Elas ocorreram durante o primeiro
+movimento, após a validação da duração e antes da primeira captura. Todas as
+cinco capturas da primeira pose foram aceitas e o experimento terminou
+normalmente. Não há evidência de prejuízo à coleta causado por essas mensagens
+nesse ensaio. O aviso do driver continua pendente; esse log não identifica o
+evento de notificação exato que acionou a consulta ao goal. O texto da mensagem
+isoladamente não prova perda de controle nem uma parada do braço.
+
+Esses resultados confirmam o fluxo físico de captura somente da IMU e a
+continuidade após falhas individuais. Não encerram os aceites pausados dos
+incrementos 4/5/6, a recuperação do laser ou a validação de precisão e
+alinhamento de referenciais. Após a correção do encerramento, a suíte Python
+completa passou com 79 testes, incluindo Stop concorrente/recusado e diagnóstico
+de `CONTROL_MANUAL_STOP`.

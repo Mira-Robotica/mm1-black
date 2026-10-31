@@ -47,7 +47,7 @@ O registro JSONL inclui linhas originais, campos interpretados, ID e horários U
 
 ## Respostas e dados
 
-O cumprimento anuncia `HELLO MM1LAB 3 stage=multi_report_capture`; `META` anuncia `capture=single`, `commands=STATUS,CAPTURE,CAL_IMU,IMU_RESET`, `schema=3`, `n_max=1`, `timeout_ms=9000` e as convenções dos dados. O cumprimento mantém duas linhas; o cabeçalho CSV é enviado **por captura**, após o ACK (`csv_header=per_capture`). Reconstrua as imagens de captura e calibração. O cliente continua aceitando STATUS do protocolo 2 (`network_only`/`unit_capture`), mas exige protocolo/schema 3 para capturar. O contrato independente de calibração permanece `cal_schema=1`.
+O cumprimento anuncia `HELLO MM1LAB 3 stage=multi_report_capture`; `META` anuncia `capture=single`, `commands=STATUS,CAPTURE,CAPTURE_IMU,CAL_IMU,IMU_RESET`, `schema=3`, `n_max=1`, `timeout_ms=9000` e as convenções dos dados. O cumprimento mantém duas linhas; o cabeçalho CSV é enviado **por captura**, após o ACK (`csv_header=per_capture`). Reconstrua as imagens de captura e calibração. O cliente continua aceitando STATUS do protocolo 2 (`network_only`/`unit_capture`), mas exige protocolo/schema 3 para capturar. O contrato independente de calibração permanece `cal_schema=1`.
 
 Exemplo ilustrativo, sem reproduzir os cumprimentos:
 
@@ -74,9 +74,57 @@ O JSONL preserva `capture.orientation_session={boot_id,imu_epoch}`, `capture.imu
 
 Não são solicitados relatórios de aceleração no lab. No incremento 4, `CAL_IMU` habilita a calibração nativa e grava DCD mediante ação explícita do operador; fora dessa sessão, RV, GRV e campo magnético calibrado são solicitados com intervalo de 20.000 µs cada (50 Hz nominais). Não há tare ou zeramento de heading. Durante calibração, CAPTURE responde BUSY. O firmware original continua habilitando os relatórios que já utilizava.
 
-`DONE` mantém `n_imu_valid` para RV e acrescenta `n_grv_valid`/`n_mag_valid`. `n_valid=1` e `result=OK` exigem laser e os três relatórios válidos, independentemente de singularidade dos ângulos. `COMPLETE/ERROR` com uma linha significa que nenhum deles é válido; havendo algum válido e outros inválidos, o resultado é `PARTIAL`. Não há tentativas extras para substituir falhas.
+`DONE` mantém `n_imu_valid` para RV e acrescenta `n_grv_valid`/`n_mag_valid`. No comando `CAPTURE`, `n_valid=1` e `result=OK` exigem laser e os três relatórios válidos, independentemente de singularidade dos ângulos. `COMPLETE/ERROR` com uma linha significa que nenhum dos resultados solicitados é válido; havendo algum válido e outros inválidos, o resultado é `PARTIAL`. Não há tentativas extras para substituir falhas.
 
 IDs devem ser positivos de 32 bits e crescer dentro da conexão; repetição ou retrocesso retorna `DUPLICATE_ID`. O cliente de teste abre uma conexão por execução, por isso pode usar `--capture 1` novamente. `n` diferente de 1 retorna `N_RANGE`; novo pedido durante uma captura retorna `BUSY`. A serial aceita os mesmos comandos, com IDs crescentes até reiniciar o ESP. Há apenas uma aquisição ativa compartilhada entre TCP e serial.
+
+## Captura sem laser — 31/10/2026
+
+O novo comando **`CAPTURE_IMU <request_id> [1]`**, em TCP e serial, captura
+somente Rotation Vector, Game Rotation Vector e Magnetic Field Calibrated.
+Mantém as mesmas regras de ID, `n=1`, exclusão mútua, `BUSY`, calibração,
+cancelamento por desconexão e formato de 35 colunas. Os IDs dos dois comandos
+compartilham a sequência crescente por conexão/origem.
+
+O ACK é `# OK CAPTURE_IMU request_id=<id> n=1 timeout_ms=9000`. O firmware
+inicia a barreira de novidade da IMU imediatamente, sem ligar a mira, enviar
+SINGLE ou aguardar a UART do laser. Mantém o prazo de 1000 ms e até três
+retentativas de I/O por padrão. A inicialização do firmware continua enviando
+o comando de desligamento do laser; não há medição implícita nesse modo.
+
+O CSV conserva as colunas: `distance_m` vazia, `laser_valid=0` e
+`laser_error=LASER_DISABLED` identificam resultado não solicitado. O DONE
+acrescenta `laser_requested=0`; `n_valid`/`result` consideram somente os três
+relatórios da IMU. Com todos válidos, retorna `OK`, mesmo com `n_laser_valid=0`.
+O comando original `CAPTURE` mantém sua semântica e acrescenta
+`laser_requested=1` ao DONE. O cliente atualizado aceita o DONE antigo de
+`CAPTURE` sem esse campo, mas exige `laser_requested=0` e `LASER_DISABLED`
+para `CAPTURE_IMU`. Não aceita distância ou contagens incompatíveis com o modo.
+
+O schema continua 3: a extensão é anunciada explicitamente por `CAPTURE_IMU`
+em `META.commands`. Requer gravar o novo firmware; não existe fallback para
+captura completa. Após reconstruir o cliente Docker independente:
+
+```sh
+docker compose -f docker/compose.yaml build status
+docker compose -f docker/compose.yaml run --rm status --host 192.168.0.10 \
+  --capture 1 --use-laser false --log /data/capture-imu.jsonl
+```
+
+O coordenador usa `use_laser:=false`; instruções no
+[guia do experimento](../docker/EXPERIMENTO_POSES.md#capturar-somente-a-imu).
+O JSONL conserva `capture_command` e `use_laser`, além das respostas completas.
+`STATUS.laser=RESYNC_REQUIRED` não impede `CAPTURE_IMU`, mas esse comando não
+limpa o bloqueio nem garante ressincronização ao voltar para `CAPTURE`.
+
+**Resultado físico em 31/10/2026:** o usuário concluiu dois experimentos somente
+com IMU, cada um com 43 poses/215 tentativas e 202 capturas aceitas, sem pose
+sem captura válida. O primeiro teve 13 falhas de I/O da IMU; o segundo teve
+11 de I/O, uma de decodificação e um EOF antes do HELLO. Ambos encerraram com
+`complete_with_failures`, confirmando a continuidade após falhas individuais.
+O aviso `uninitialized ServerGoalHandle` apareceu no primeiro movimento da
+segunda execução, que prosseguiu até o fim. Relato completo no
+[guia do experimento](../docker/EXPERIMENTO_POSES.md#dois-experimentos-concluídos-somente-com-imu--31102026).
 
 ## Novidade, prazos e recuperação
 
