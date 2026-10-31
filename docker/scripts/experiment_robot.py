@@ -85,6 +85,8 @@ def hardware_robot():
         def __init__(self):
             # Set before subscriptions, which can invoke callbacks immediately.
             self.experiment_complete = False
+            self.stop_lock = threading.Lock()
+            self.stop_requested = False
             self.measured = None
             self.capture_target = None
             self.capture_error = None
@@ -96,8 +98,25 @@ def hardware_robot():
             self.experiment_complete = True
 
         def stop(self):
-            if not self.experiment_complete:
-                super().stop()
+            # Watchdog, exception handlers and ROS shutdown share one stop attempt.
+            # Mark before the service call: concurrent cleanup must not resend it,
+            # including when the controller rejects a session without control.
+            with self.stop_lock:
+                if self.experiment_complete or self.stop_requested:
+                    return
+                self.stop_requested = True
+            super().stop()
+
+        def on_action(self, notification):
+            super().on_action(notification)
+            with self.lock:
+                if (self.motion_error and notification.handle.identifier == self.expected_action
+                        and notification.abort_details == 55):
+                    # Kortex SubErrorCodes.CONTROL_MANUAL_STOP; this does not
+                    # identify the operator/session that originated the stop.
+                    detail = "CONTROL_MANUAL_STOP: controlador reportou parada; origem não identificada"
+                    if detail not in self.motion_error:
+                        self.motion_error += "; " + detail
 
         def on_feedback(self, message):
             super().on_feedback(message)
