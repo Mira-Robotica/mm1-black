@@ -8,6 +8,7 @@
 namespace lab {
 struct Sample {
     uint32_t request_id = 0;
+    bool laser_requested = true;
     LaserResult laser;
     P4ImuSample imu{};
     Orientation angles;
@@ -26,7 +27,7 @@ struct Sample {
 };
 void capture_begin();
 void capture_tick();
-bool capture_start(uint32_t id);
+bool capture_start(uint32_t id, bool use_laser = true);
 void capture_cancel();
 bool capture_busy();
 bool capture_ready();
@@ -34,5 +35,5 @@ const Sample &capture_sample();
 const char *capture_state();
 // Pure formatting/parser helpers allow host tests without Arduino.
 size_t format_sample(char *out, size_t size, const Sample &sample);
-bool parse_capture(const char *line, uint32_t &id, uint32_t &count);
+bool parse_capture(const char *line, uint32_t &id, uint32_t &count, bool *use_laser = nullptr);
 }

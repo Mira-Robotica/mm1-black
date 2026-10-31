@@ -53,8 +53,10 @@ def provenance():
 
 
 class TcpTrena:
-    def __init__(self, host, port, timeout):
+    def __init__(self, host, port, timeout, use_laser=True):
         self.host, self.port, self.timeout = host, port, timeout
+        self.use_laser = use_laser
+        self.command = "CAPTURE" if use_laser else "CAPTURE_IMU"
         self.next_connection_at = 0.0
 
     def preflight(self, record):
@@ -64,33 +66,40 @@ class TcpTrena:
         if (record["hello"]["stage"] != "multi_report_capture" or
                 meta.get("schema") != "3" or meta.get("n_max") != "1" or
                 meta.get("csv_header") != "per_capture" or
-                "CAPTURE" not in meta["commands"].split(",")):
-            raise status.ProtocolError("Experiment requires schema 3, single CAPTURE")
+                self.command not in meta["commands"].split(",")):
+            raise status.ProtocolError(
+                f"Experimento requer schema 3 e {self.command} unitário; atualize o firmware da Trena")
 
     def capture(self, capture_id, record):
         # Give the single-client ESP server time to observe the previous FIN.
         time.sleep(max(0.0, self.next_connection_at - time.monotonic()))
         try:
-            status.query_status(self.host, self.port, self.timeout, capture_id, record)
+            status.query_status(self.host, self.port, self.timeout, capture_id, record, use_laser=self.use_laser)
         finally:
             self.next_connection_at = time.monotonic() + 0.2
 
 
 class SimulatedTrena:
     """Synthetic fixture, no network and no physical measurement."""
+    def __init__(self, use_laser=True):
+        self.use_laser = use_laser
+        self.command = "CAPTURE" if use_laser else "CAPTURE_IMU"
+
     def preflight(self, record):
         record.update(source="simulated", hello={"boot_id": "0000000000000000"},
                       meta={"schema": "3", "laser_axis": "1/0/0"})
 
     def capture(self, capture_id, record):
         self.preflight(record)
-        row = (f"{capture_id},1,1.234,1,NONE,1,0,0,0,90,0,0,1,NONE,0.025,3,1,1,NONE,"
+        record.update(capture_command=self.command, use_laser=self.use_laser)
+        laser = "1.234,1,NONE" if self.use_laser else ",0,LASER_DISABLED"
+        row = (f"{capture_id},1,{laser},1,0,0,0,90,0,0,1,NONE,0.025,3,1,1,NONE,"
                "1,0,0,0,3,1,1,NONE,12,-3,40,3,1,1,NONE,0")
         done_line = (f"# DONE request_id={capture_id} completion=COMPLETE result=OK n_requested=1 "
-                     "n_rows=1 n_valid=1 n_laser_valid=1 n_imu_valid=1 n_grv_valid=1 n_mag_valid=1 "
-                     "imu_reset=0 code=NONE state=IDLE")
-        sample = status.parse_sample(status.CAPTURE_HEADER, row, capture_id)
-        record["capture"] = dict(sample=sample, done=status.parse_done(done_line, sample, capture_id),
+                     f"n_rows=1 n_valid=1 n_laser_valid={int(self.use_laser)} n_imu_valid=1 n_grv_valid=1 n_mag_valid=1 "
+                     f"imu_reset=0 code=NONE state=IDLE laser_requested={int(self.use_laser)}")
+        sample = status.parse_sample(status.CAPTURE_HEADER, row, capture_id, self.use_laser)
+        record["capture"] = dict(sample=sample, done=status.parse_done(done_line, sample, capture_id, self.use_laser),
                                  complete=True, imu_reset=False,
                                  orientation_session={"boot_id": "0000000000000000", "imu_epoch": 0})
 
@@ -121,6 +130,7 @@ def run_experiment(robot, trena, journal, metadata, first_capture_id=1, captures
 
     try:
         write("session", metadata=metadata, captures_per_pose=captures_per_pose,
+              use_laser=trena.use_laser, capture_command=trena.command,
               targets_joints_deg=robot.poses)
         preflight = {}
         try:
@@ -135,6 +145,7 @@ def run_experiment(robot, trena, journal, metadata, first_capture_id=1, captures
             for attempt in range(captures_per_pose):
                 capture_id = first_capture_id + index * captures_per_pose + attempt
                 row = dict(pose_id=pose_id, pose_index=index, capture_id=capture_id,
+                           use_laser=trena.use_laser, capture_command=trena.command,
                            attempt_index=attempt + 1, attempts_requested=captures_per_pose,
                            target_joints_deg=list(target), pc_started_utc=status.utc_now(),
                            phase="move" if attempt == 0 else "capture",
@@ -148,7 +159,7 @@ def run_experiment(robot, trena, journal, metadata, first_capture_id=1, captures
                     with robot.capture_guard(target):
                         row["robot_before"] = robot.snapshot()
                         print(f"Pose {index + 1}/{len(robot.poses)}; tentativa "
-                              f"{attempt + 1}/{captures_per_pose}; CAPTURE {capture_id} 1", flush=True)
+                              f"{attempt + 1}/{captures_per_pose}; {trena.command} {capture_id} 1", flush=True)
                         row["capture_started_utc"] = status.utc_now()
                         row["capture_started_monotonic_s"] = time.monotonic()
                         try:
@@ -215,6 +226,7 @@ def run_experiment(robot, trena, journal, metadata, first_capture_id=1, captures
                     print(f"AVISO {pose_id}, captura {capture_id}: {row['error']}; "
                           "falha registrada, seguindo tentativas planejadas", flush=True)
             write("pose_summary", pose_id=pose_id, pose_index=index,
+                  use_laser=trena.use_laser, capture_command=trena.command,
                   captures_requested=captures_per_pose, captures_recorded=captures_per_pose,
                   accepted_captures=accepted_count, failed_captures=captures_per_pose-accepted_count,
                   sensor_valid_counts=sensor_valid_counts,
@@ -254,6 +266,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--execution-mode", choices=("simulated", "rviz", "hardware"), default="simulated")
     parser.add_argument("--trena-mode", choices=("simulated", "tcp"), default=None)
+    parser.add_argument("--use-laser", type=status.boolean, default=True, metavar="true|false",
+                        help="false captura apenas RV, GRV e campo magnético (padrão: true)")
     parser.add_argument("--host", type=status.ipv4, default=os.getenv("LAB_HOST") or None)
     parser.add_argument("--port", type=status.port_number, default=os.getenv("LAB_PORT", "5000"))
     parser.add_argument("--timeout", type=status.timeout_seconds, default=os.getenv("LAB_TIMEOUT", "5"))
@@ -299,7 +313,8 @@ def main(argv=None):
                 metadata["motion_parameters"] = {key: getattr(robot, key) for key in (
                     "hold_sec", "action_timeout", "settle_timeout", "feedback_timeout",
                     "position_tolerance", "velocity_tolerance", "max_duration")}
-        trena = TcpTrena(args.host, args.port, args.timeout) if args.trena_mode == "tcp" else SimulatedTrena()
+        trena = (TcpTrena(args.host, args.port, args.timeout, args.use_laser)
+                 if args.trena_mode == "tcp" else SimulatedTrena(args.use_laser))
         print(f"Registro: {args.log}", flush=True)
         return run_experiment(robot, trena, journal, metadata, args.first_capture_id, args.captures_per_pose)
     except (Exception, KeyboardInterrupt) as exc:

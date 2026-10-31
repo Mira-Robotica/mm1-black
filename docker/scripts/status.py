@@ -108,7 +108,7 @@ def parse_hello(line):
     return hello
 
 
-def parse_sample(header, row, capture_id):
+def parse_sample(header, row, capture_id, use_laser=True):
     if header != CAPTURE_HEADER:
         raise ProtocolError("Cabeçalho CSV de captura inesperado (requer schema 3)")
     cells = next(csv.reader([row]))
@@ -117,6 +117,11 @@ def parse_sample(header, row, capture_id):
     sample = dict(zip(CAPTURE_HEADER.split(","), cells))
     expect(sample, "request_id", str(capture_id))
     expect(sample, "sample_index", "1")
+    if not use_laser:
+        for key, value in (("distance_m", ""), ("laser_valid", "0"), ("laser_error", "LASER_DISABLED")):
+            expect(sample, key, value)
+    elif sample["laser_error"] == "LASER_DISABLED":
+        raise ProtocolError("CSV: laser desabilitado em uma captura que solicita distância")
     integer(sample, "imu_epoch", 0, 0xFFFFFFFF)
     for group in ("laser", "imu", "grv", "mag", "angles"):
         flag, error = group + "_valid", "angle_error" if group == "angles" else group + "_error"
@@ -168,7 +173,7 @@ def parse_sample(header, row, capture_id):
     return sample
 
 
-def parse_done(line, sample, capture_id):
+def parse_done(line, sample, capture_id, use_laser=True):
     done = fields(line, "# DONE", ("request_id", "completion", "result", "n_requested", "n_rows",
                                   "n_valid", "n_laser_valid", "n_imu_valid", "n_grv_valid",
                                   "n_mag_valid", "imu_reset", "code", "state"))
@@ -178,6 +183,11 @@ def parse_done(line, sample, capture_id):
     flags = [int(sample[group + "_valid"]) for group in ("laser", "imu", "grv", "mag")]
     for group, flag in zip(("laser", "imu", "grv", "mag"), flags):
         expect(done, f"n_{group}_valid", str(flag))
+    if not use_laser or "laser_requested" in done:
+        if done.get("laser_requested") != str(int(use_laser)):
+            raise ProtocolError("DONE: laser_requested incompatível com o comando enviado")
+    if not use_laser:
+        flags = flags[1:]
     expect(done, "n_valid", str(int(all(flags))))
     expect(done, "result", "OK" if all(flags) else "PARTIAL" if any(flags) else "ERROR")
     if done["imu_reset"] not in {"0", "1"}:
@@ -188,13 +198,16 @@ def parse_done(line, sample, capture_id):
     return done
 
 
-def query_status(host, port=5000, timeout=5.0, capture_id=None, record=None):
+def query_status(host, port=5000, timeout=5.0, capture_id=None, record=None, use_laser=True):
     """Return protocol data; preserve received lines in record even on interruption."""
     host = str(ipaddress.IPv4Address(host))
     if capture_id is not None and (type(capture_id) is not int or not 1 <= capture_id <= 0xFFFFFFFF):
         raise ValueError("ID da captura deve estar entre 1 e 4294967295")
     result = {} if record is None else record
     result["lines"] = []
+    command = "CAPTURE" if use_laser else "CAPTURE_IMU"
+    if capture_id is not None:
+        result.update(capture_command=command, use_laser=use_laser)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(timeout)
         try:
@@ -246,24 +259,26 @@ def query_status(host, port=5000, timeout=5.0, capture_id=None, record=None):
         for key in ("attempt", "disconnect_reason", "uptime_ms"):
             integer(status, key, 0, 0xFFFFFFFF)
         if capture_id is not None:
-            if stage != "multi_report_capture" or "CAPTURE" not in meta["commands"].split(","):
+            if stage != "multi_report_capture":
                 raise ProtocolError("Captura requer firmware MM1LAB 3 com schema=3")
+            if command not in meta["commands"].split(","):
+                raise ProtocolError(f"Firmware não anuncia {command}; atualize o firmware da Trena")
             for key, value in (("schema", "3"), ("n_max", "1"), ("csv_header", "per_capture")):
                 if meta.get(key) != value:
                     raise ProtocolError(f"META: captura unitária requer {key}={value}")
             sock.settimeout(timeout)
-            sock.sendall(f"CAPTURE {capture_id} 1\n".encode("ascii"))
-            ack = fields(read("ACK"), "# OK CAPTURE", ("request_id", "n", "timeout_ms"))
+            sock.sendall(f"{command} {capture_id} 1\n".encode("ascii"))
+            ack = fields(read("ACK"), f"# OK {command}", ("request_id", "n", "timeout_ms"))
             expect(ack, "request_id", str(capture_id))
             expect(ack, "n", "1")
             integer(ack, "timeout_ms", 1, 9000)
             reader.timeout = int(ack["timeout_ms"])/1000 + timeout
             header = read("CSV header")
-            sample = parse_sample(header, read("CSV row"), capture_id)
+            sample = parse_sample(header, read("CSV row"), capture_id, use_laser)
             result["capture"] = {"sample": sample, "complete": False,
                                  "orientation_session": {"boot_id": hello["boot_id"],
                                                          "imu_epoch": int(sample["imu_epoch"])}}
-            done = parse_done(read("DONE"), sample, capture_id)
+            done = parse_done(read("DONE"), sample, capture_id, use_laser)
             result["capture"].update(done=done, complete=True, imu_reset=done["imu_reset"] == "1")
         return result
 
@@ -299,6 +314,12 @@ def utc_now():
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
+def boolean(value):
+    if value.lower() in {"true", "false"}:
+        return value.lower() == "true"
+    raise argparse.ArgumentTypeError("use true ou false")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="STATUS e captura unitária RV/GRV/MAG do MM1LAB 3.")
     parser.add_argument("--host", type=ipv4, default=os.getenv("LAB_HOST") or None,
@@ -310,6 +331,8 @@ def main(argv=None):
                         help="acrescenta o resultado a um JSONL, por exemplo /data/status.jsonl")
     parser.add_argument("--capture", type=int, metavar="ID",
                         help="após STATUS, testa uma aquisição unitária e aguarda DONE")
+    parser.add_argument("--use-laser", type=boolean, default=True, metavar="true|false",
+                        help="false seleciona CAPTURE_IMU (padrão: true)")
     args = parser.parse_args(argv)
     if args.host is None:
         parser.error("informe --host IP ou configure LAB_HOST")
@@ -323,7 +346,7 @@ def main(argv=None):
     started = time.monotonic()
     exit_code = 0
     try:
-        query_status(args.host, args.port, args.timeout, args.capture, record=record)
+        query_status(args.host, args.port, args.timeout, args.capture, record=record, use_laser=args.use_laser)
         record["ok"] = True
         for line in record["lines"]:
             print(line)

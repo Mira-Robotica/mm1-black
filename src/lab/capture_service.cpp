@@ -34,14 +34,28 @@ bool capture_busy() { return phase != Phase::Idle; }
 bool capture_ready() { return phase == Phase::Ready; }
 const Sample &capture_sample() { return sample; }
 const char *capture_state() { return capture_busy() ? "BUSY" : "IDLE"; }
-void capture_cancel() { laser_cancel(); phase = Phase::Idle; }
-bool capture_start(uint32_t id)
+void capture_cancel()
+{
+    if (sample.laser_requested) laser_cancel();
+    phase = Phase::Idle;
+}
+bool capture_start(uint32_t id, bool use_laser)
 {
     if (capture_busy() || calibration_blocks_capture()) return false;
     sample = {}; sample.request_id = id;
+    sample.laser_requested = use_laser;
     sample.imu_epoch = p4_imu_diagnostics().epoch;
-    started = millis(); phase = Phase::Laser;
-    laser_start();
+    started = millis();
+    if (use_laser) {
+        phase = Phase::Laser;
+        laser_start();
+    } else {
+        sample.laser = {false, 0, "LASER_DISABLED"};
+        // Establish freshness after this request, without waiting for the laser.
+        barrier = p4_imu_diagnostics();
+        imu_started = started;
+        phase = Phase::DrainImu;
+    }
     return true;
 }
 void capture_tick()

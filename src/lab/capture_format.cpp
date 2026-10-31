@@ -5,10 +5,12 @@
 #include <cmath>
 
 namespace lab {
-bool parse_capture(const char *line, uint32_t &id, uint32_t &count)
+bool parse_capture(const char *line, uint32_t &id, uint32_t &count, bool *use_laser)
 {
-    if (std::strncmp(line, "CAPTURE ", 8)) return false;
-    const char *p = line+8;
+    const bool imu_only = std::strncmp(line, "CAPTURE_IMU ", 12) == 0;
+    if (!imu_only && std::strncmp(line, "CAPTURE ", 8)) return false;
+    if (use_laser) *use_laser = !imu_only;
+    const char *p = line + (imu_only ? 12 : 8);
     auto number = [&p](uint32_t &value) {
         while (*p == ' ') ++p;
         value = 0;
@@ -67,15 +69,15 @@ size_t format_sample(char *out, size_t size, const Sample &s)
         std::snprintf(mag, sizeof(mag), "%s,%s,%s,%u,%u", x, y, z,
                       (unsigned)s.mag.status, (unsigned)s.mag.sequence);
     }
-    const bool all = s.laser.valid && s.imu_valid && s.grv_valid && s.mag_valid;
-    const bool any = s.laser.valid || s.imu_valid || s.grv_valid || s.mag_valid;
+    const bool all = (!s.laser_requested || s.laser.valid) && s.imu_valid && s.grv_valid && s.mag_valid;
+    const bool any = (s.laser_requested && s.laser.valid) || s.imu_valid || s.grv_valid || s.mag_valid;
     const char *result = all ? "OK" : any ? "PARTIAL" : "ERROR";
     const int length = std::snprintf(out, size,
         "request_id,sample_index,distance_m,laser_valid,laser_error,qw,qx,qy,qz,azimuth_deg,inclination_deg,roll_deg,angles_valid,angle_error,accuracy_rad,imu_status,imu_seq,imu_valid,imu_error,"
         "grv_qw,grv_qx,grv_qy,grv_qz,grv_status,grv_seq,grv_valid,grv_error,"
         "mag_x_ut,mag_y_ut,mag_z_ut,mag_status,mag_seq,mag_valid,mag_error,imu_epoch\n"
         "%lu,1,%s,%u,%s,%s,%s,%u,%s,%s,%u,%s,%s,%u,%s,%s,%u,%s,%lu\n"
-        "# DONE request_id=%lu completion=COMPLETE result=%s n_requested=1 n_rows=1 n_valid=%u n_laser_valid=%u n_imu_valid=%u n_grv_valid=%u n_mag_valid=%u imu_reset=%u code=NONE state=IDLE imu_retries=%u imu_retry_limit=%u imu_io_errors=%lu\n",
+        "# DONE request_id=%lu completion=COMPLETE result=%s n_requested=1 n_rows=1 n_valid=%u n_laser_valid=%u n_imu_valid=%u n_grv_valid=%u n_mag_valid=%u imu_reset=%u code=NONE state=IDLE imu_retries=%u imu_retry_limit=%u imu_io_errors=%lu laser_requested=%u\n",
         (unsigned long)s.request_id, distance, (unsigned)s.laser.valid, s.laser.error, quat, angles,
         (unsigned)(s.imu_valid && s.angles.angles_valid), s.imu_valid ? s.angles.error : "IMU_INVALID",
         quality, (unsigned)s.imu_valid, s.imu_error,
@@ -83,7 +85,8 @@ size_t format_sample(char *out, size_t size, const Sample &s)
         (unsigned long)s.imu_epoch, (unsigned long)s.request_id, result,
         (unsigned)all, (unsigned)s.laser.valid, (unsigned)s.imu_valid,
         (unsigned)s.grv_valid, (unsigned)s.mag_valid, (unsigned)s.imu_reset,
-        s.imu_retries, (unsigned)LAB_IMU_MAX_RETRIES, (unsigned long)s.imu_io_errors);
+        s.imu_retries, (unsigned)LAB_IMU_MAX_RETRIES, (unsigned long)s.imu_io_errors,
+        (unsigned)s.laser_requested);
     return length >= 0 && (size_t)length < size ? (size_t)length : 0;
 }
 }

@@ -147,25 +147,27 @@ void command(const char *line, bool from_serial)
         }
     } else if (strcmp(line, "CAL_IMU") == 0 || strncmp(line, "CAL_IMU ", 8) == 0) {
         lab::calibration_command(line, from_serial ? lab::CalOwner::Serial : lab::CalOwner::Tcp, reply, sizeof(reply));
-    } else if (strcmp(line, "CAPTURE") == 0 || strncmp(line, "CAPTURE ", 8) == 0) {
+    } else if (strcmp(line, "CAPTURE") == 0 || strncmp(line, "CAPTURE ", 8) == 0 ||
+               strcmp(line, "CAPTURE_IMU") == 0 || strncmp(line, "CAPTURE_IMU ", 12) == 0) {
         uint32_t id = 0, count = 0;
+        bool use_laser = true;
         uint32_t &last = from_serial ? last_serial_id : last_tcp_id;
-        if (!lab::parse_capture(line, id, count)) {
-            snprintf(reply, sizeof(reply), "# ERR BAD_CAPTURE expected=CAPTURE_id_[1]\n");
+        if (!lab::parse_capture(line, id, count, &use_laser)) {
+            snprintf(reply, sizeof(reply), "# ERR BAD_CAPTURE expected=CAPTURE_or_CAPTURE_IMU_id_[1]\n");
         } else if (count != 1) {
             snprintf(reply, sizeof(reply), "# ERR N_RANGE n_max=1\n");
         } else if (lab::capture_busy() || lab::calibration_blocks_capture()) {
             snprintf(reply, sizeof(reply), "# ERR BUSY\n");
         } else if (id <= last) {
             snprintf(reply, sizeof(reply), "# ERR DUPLICATE_ID\n");
-        } else if (lab::capture_start(id)) {
+        } else if (lab::capture_start(id, use_laser)) {
             last = id; owner = from_serial ? Owner::Serial : Owner::Tcp;
             result_queued = false;
-            snprintf(reply, sizeof(reply), "# OK CAPTURE request_id=%lu n=1 timeout_ms=9000\n",
-                     (unsigned long)id);
+            snprintf(reply, sizeof(reply), "# OK %s request_id=%lu n=1 timeout_ms=9000\n",
+                     use_laser ? "CAPTURE" : "CAPTURE_IMU", (unsigned long)id);
         } else snprintf(reply, sizeof(reply), "# ERR BUSY\n");
     } else {
-        snprintf(reply, sizeof(reply), "# ERR BAD_COMMAND supported=STATUS,CAPTURE,CAL_IMU,IMU_RESET\n");
+        snprintf(reply, sizeof(reply), "# ERR BAD_COMMAND supported=STATUS,CAPTURE,CAPTURE_IMU,CAL_IMU,IMU_RESET\n");
     }
     if (from_serial) {
         Serial.print(reply);
@@ -207,7 +209,7 @@ void service_tcp()
             char hello[sizeof(tx)];
             snprintf(hello, sizeof(hello),
                      "# HELLO MM1LAB 3 stage=multi_report_capture boot_id=%s connection_id=%lu\n"
-                     "# META capture=single commands=STATUS,CAPTURE,CAL_IMU,IMU_RESET cal_schema=1 cal_line_max=2048 schema=3 n_max=1 timeout_ms=9000 "
+                     "# META capture=single commands=STATUS,CAPTURE,CAPTURE_IMU,CAL_IMU,IMU_RESET cal_schema=1 cal_line_max=2048 schema=3 n_max=1 timeout_ms=9000 "
                      "imu_reports=rotation_vector,game_rotation_vector,magnetic_field_calibrated "
                      "rv_id=0x05 grv_id=0x08 mag_id=0x03 rv_requested_us=20000 grv_requested_us=20000 mag_requested_us=20000 "
                      "intervals=nominal_acquisition confirmed_intervals=STATUS unknown_interval=-1 "
@@ -275,7 +277,7 @@ void start_server()
     server.begin();
     server_started = static_cast<bool>(server);
     Serial.printf("[LAB] TCP port=%u %s\n", static_cast<unsigned>(LAB_TCP_PORT),
-                  server_started ? "LISTENING (STATUS,CAPTURE n=1)" : "FAILED; retry in 10 s");
+                  server_started ? "LISTENING (STATUS,CAPTURE/CAPTURE_IMU n=1)" : "FAILED; retry in 10 s");
 }
 
 void start_attempt()

@@ -13,6 +13,7 @@
   <arg name="vision" default="true"/>
   <arg name="first_tilt_deg" default="120.0"/>
   <arg name="captures_per_pose" default="5"/>
+  <arg name="use_laser" default="true"/>
   <arg name="hold_sec" default="1.0"/>
   <arg name="visual_move_sec" default="2.0"/>
   <arg name="position_tolerance_deg" default="0.1"/>
@@ -29,7 +30,7 @@
   </include>
   <node pkg="mm1_experiment" type="experiment_node.py" name="mm1_experiment"
         output="screen" required="true"
-        args="--captures-per-pose $(arg captures_per_pose) --execution-mode $(arg execution_mode) --trena-mode $(arg trena_mode) --host '$(arg trena_host)' --port $(arg trena_port) --timeout $(arg timeout) --hold-sec $(arg hold_sec) --first-tilt-deg $(arg first_tilt_deg) --output-dir '$(arg output_dir)'">
+        args="--use-laser $(arg use_laser) --captures-per-pose $(arg captures_per_pose) --execution-mode $(arg execution_mode) --trena-mode $(arg trena_mode) --host '$(arg trena_host)' --port $(arg trena_port) --timeout $(arg timeout) --hold-sec $(arg hold_sec) --first-tilt-deg $(arg first_tilt_deg) --output-dir '$(arg output_dir)'">
     <param name="robot_name" value="$(arg robot_name)"/>
     <param name="robot_ip" value="$(arg robot_ip)"/>
     <param name="vision" value="$(arg vision)"/>
