@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>mm1_experiment</name>
+  <version>0.1.0</version>
+  <description>MM1 Trena and Kinova pose experiment coordinator.</description>
+  <maintainer email="demo@example.com">MM1 Lab</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>catkin</buildtool_depend>
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>kinova_geomagic_demo</exec_depend>
+</package>
