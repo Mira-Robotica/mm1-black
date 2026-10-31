@@ -1,4 +1,5 @@
 #include "capture_service.h"
+#include "settings.h"
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -74,14 +75,15 @@ size_t format_sample(char *out, size_t size, const Sample &s)
         "grv_qw,grv_qx,grv_qy,grv_qz,grv_status,grv_seq,grv_valid,grv_error,"
         "mag_x_ut,mag_y_ut,mag_z_ut,mag_status,mag_seq,mag_valid,mag_error,imu_epoch\n"
         "%lu,1,%s,%u,%s,%s,%s,%u,%s,%s,%u,%s,%s,%u,%s,%s,%u,%s,%lu\n"
-        "# DONE request_id=%lu completion=COMPLETE result=%s n_requested=1 n_rows=1 n_valid=%u n_laser_valid=%u n_imu_valid=%u n_grv_valid=%u n_mag_valid=%u imu_reset=%u code=NONE state=IDLE\n",
+        "# DONE request_id=%lu completion=COMPLETE result=%s n_requested=1 n_rows=1 n_valid=%u n_laser_valid=%u n_imu_valid=%u n_grv_valid=%u n_mag_valid=%u imu_reset=%u code=NONE state=IDLE imu_retries=%u imu_retry_limit=%u imu_io_errors=%lu\n",
         (unsigned long)s.request_id, distance, (unsigned)s.laser.valid, s.laser.error, quat, angles,
         (unsigned)(s.imu_valid && s.angles.angles_valid), s.imu_valid ? s.angles.error : "IMU_INVALID",
         quality, (unsigned)s.imu_valid, s.imu_error,
         grv, (unsigned)s.grv_valid, s.grv_error, mag, (unsigned)s.mag_valid, s.mag_error,
         (unsigned long)s.imu_epoch, (unsigned long)s.request_id, result,
         (unsigned)all, (unsigned)s.laser.valid, (unsigned)s.imu_valid,
-        (unsigned)s.grv_valid, (unsigned)s.mag_valid, (unsigned)s.imu_reset);
+        (unsigned)s.grv_valid, (unsigned)s.mag_valid, (unsigned)s.imu_reset,
+        s.imu_retries, (unsigned)LAB_IMU_MAX_RETRIES, (unsigned long)s.imu_io_errors);
     return length >= 0 && (size_t)length < size ? (size_t)length : 0;
 }
 }

@@ -84,8 +84,22 @@ void capture_tick()
         }
         return;
     }
+    // Never accept callbacks from a polling cycle with a transport failure.
+    // A new empty read followed by new generations re-establishes freshness.
+    if (diag.io_errors != barrier.io_errors) {
+        sample.imu_io_errors += uint32_t(diag.io_errors - barrier.io_errors);
+        if (diag.decode_errors != barrier.decode_errors) {
+            imu_finish("IMU_DECODE_ERROR"); return;
+        }
+        if (static_cast<int>(sample.imu_retries) >= LAB_IMU_MAX_RETRIES) {
+            imu_finish("IMU_IO_ERROR"); return;
+        }
+        ++sample.imu_retries;
+        barrier = diag;
+        phase = Phase::DrainImu;
+        return; // Keep imu_started, request ID and previously captured reports.
+    }
     if (phase == Phase::DrainImu) {
-        if (diag.io_errors != barrier.io_errors) { imu_finish("IMU_IO_ERROR"); return; }
         if (diag.decode_errors != barrier.decode_errors) { imu_finish("IMU_DECODE_ERROR"); return; }
         // A successful empty HAL read proves the pending FIFO was drained.
         if (diag.empty_reads != barrier.empty_reads) {
@@ -124,7 +138,6 @@ void capture_tick()
     if (sample.imu_received && sample.grv_received && sample.mag_received) phase = Phase::Ready;
     // A mixed cargo can deliver valid reports before another report fails decoding.
     // Preserve those fresh reports and attribute the transport error only to missing ones.
-    else if (diag.io_errors != barrier.io_errors) imu_finish("IMU_IO_ERROR");
     else if (diag.decode_errors != barrier.decode_errors) imu_finish("IMU_DECODE_ERROR");
 }
 }

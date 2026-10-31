@@ -12,6 +12,8 @@
 // Optional acquisition settings (also defaulted for older local config files).
 #define LAB_LASER_TIMEOUT_MS 3200UL
 #define LAB_IMU_TIMEOUT_MS 1000UL
+// Additional acquisition attempts after I/O errors, within the same deadline.
+#define LAB_IMU_MAX_RETRIES 3
 // Manual IMU calibration: bounded session/SH-2 commands and feedback recency.
 #define LAB_CAL_SESSION_TIMEOUT_MS 300000UL
 #define LAB_CAL_OP_TIMEOUT_MS 2000UL

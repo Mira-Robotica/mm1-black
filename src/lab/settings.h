@@ -35,3 +35,8 @@ static_assert(LAB_CAL_FRESH_MS >= 100 && LAB_CAL_FRESH_MS <= 2000, "Feedback fre
 #endif
 static_assert(LAB_LASER_TIMEOUT_MS >= 100 && LAB_LASER_TIMEOUT_MS <= 3200, "Laser timeout: 100..3200 ms");
 static_assert(LAB_IMU_TIMEOUT_MS >= 100 && LAB_IMU_TIMEOUT_MS <= 1000, "IMU timeout: 100..1000 ms");
+
+#ifndef LAB_IMU_MAX_RETRIES
+#define LAB_IMU_MAX_RETRIES 3
+#endif
+static_assert(LAB_IMU_MAX_RETRIES >= 0 && LAB_IMU_MAX_RETRIES <= 20, "IMU retries: 0..20");

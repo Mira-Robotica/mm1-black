@@ -21,6 +21,8 @@ struct Sample {
     const char *grv_error = "IMU_NOT_READY", *mag_error = "IMU_NOT_READY";
     uint32_t imu_epoch = 0;
     bool imu_reset = false;
+    uint32_t imu_io_errors = 0;
+    unsigned imu_retries = 0;
 };
 void capture_begin();
 void capture_tick();
