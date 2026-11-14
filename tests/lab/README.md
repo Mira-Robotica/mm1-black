@@ -53,3 +53,20 @@ A regressão de salvamento de 13/10/2026 também verifica que, após alcançar `
 O incremento 6 estende a aquisição para três caches/contadores, barreira comum após o laser, chegada em ordens/sequências diferentes e ausência individual. Testa baixa qualidade, quaternions inválidos, campo não finito, prazo/backlog, preservação de relatórios válidos diante de falha e contagens/35 colunas do schema 3. Mudança de epoch durante a captura impede mistura entre sessões, preservando o que já foi obtido. Reset durante o laser e cancelamento também são exercitados.
 
 A integração SparkFun verifica componentes completos de GRV/campo em µT, duplicatas independentes, invalidação/epoch no reset, três relatórios habilitados e intervalo confirmado diferente do solicitado. A suíte de calibração confere restauração dos três relatórios a 20.000 µs. As nove suítes passaram com ASan/UBSan; os 41 testes Python passaram em loopback. O aceite físico segue pendente no plano.
+
+Os testes de streaming incluem `test_stream.cpp` (geometria, retenção, snapshot,
+confirmação, rollback e recuperação) e `test_stream_network.cpp` (dispatcher real,
+TCP/serial, backpressure, envio parcial e desconexão). O teste SparkFun exercita
+os decoders e caches Raw/Uncalibrated pela cadeia Wire/SHTP/SH-2 real. Cabeçalho
+compartilhado com Python: `docker/tests/fixtures/stream_header.csv`.
+
+Se LeakSanitizer não funcionar sob ptrace no executor, use
+`ASAN_OPTIONS=detect_leaks=0 sh tests/lab/run.sh`; ASan/UBSan continuam habilitados.
+O [guia do monitor](../../docs/LAB_MONITOR_IMU.md) separa testes simulados de bancada
+pendente, incluindo a ausência de mapeamento comprovado do azimute Raw.
+
+Regressão do panic de pilha de 13/11/2026: o módulo de rede limita cada frame
+compilado a 1024 bytes (erro de compilação). O teste TCP verifica que uma linha
+longa parcialmente enviada permanece intacta quando comandos serial/TCP reusam
+o workspace estático. Medições no objeto RISC-V e validação física pendente em
+[LAB_CALIBRACAO_IMU_P4.md](../../docs/LAB_CALIBRACAO_IMU_P4.md#causa-confirmada-pelo-panic-e-correção-de-pilha).

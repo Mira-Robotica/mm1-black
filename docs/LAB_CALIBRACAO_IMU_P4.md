@@ -217,3 +217,93 @@ O arquivo contém 625 consultas STATUS, um START, 12 CONFIRM e um SAVE; não há
 O contador `io_errors` passou de **0 para 139** entre o início e o salvamento. `decode_errors=0`, `resets=1` e `rv_gaps=1` permaneceram nos valores observados; Game RV e Magnetic Field terminaram com zero gaps. Os 139 erros de I/O continuaram iguais no STATUS posterior e no STATUS anterior à captura. A sessão concluída não permite afirmar ausência de falhas de transporte; a causa desses incrementos não é determinada por esses logs e permanece a investigar.
 
 Às 06:09:12.699–06:09:13.521, `status --capture 1` entregou um par laser/IMU válido, com qualidade **3/3**, `accuracy_rad=0.0927734375` e distância **0.844000041 m**; detalhes no [guia de aquisição](LAB_SENSORES_P4.md#captura-após-save-confirmado--13102026). Calibração, STATUS e captura compartilham `boot_id=e3268535897ff631` (conexões 1, 2 e 3). Portanto, confirma-se a captura após SAVE no mesmo boot, mas ainda não a conservação do DCD após desligar/ligar o conjunto. Também não há referência angular externa neste ensaio para medir a precisão real.
+
+## Timeout de STATUS e reinícios — 13/11/2026
+
+Foram inspecionados os registros `docker/data/cal-imu-1794612421823036535.jsonl`,
+`cal-imu-1794612506297628877.jsonl` e `cal-imu-1794612774304855002.jsonl`.
+Todos terminam sem resposta completa a `CAL_IMU STATUS` no prazo de 5 s.
+O primeiro e o terceiro ainda estavam em IDLE, sem START. No segundo, a última
+resposta (20:30:19, horário de Brasília) estava em MAG_ROLL, etapa 5,
+`confirmed=9`, `dcd=NOT_SAVED`, `mag_age_ms=0`, `io_errors=270` e
+`failed_op=NONE`. Nenhum dos três registros contém comando SAVE.
+O timeout ocorreu antes de expirar o limite de 15 minutos da sessão.
+
+Os três HELLO têm boot_id diferentes. O operador confirmou que os reinícios
+foram espontâneos. Isso evidencia um problema além do procedimento de movimentos;
+os registros não determinam se houve panic, watchdog ou problema de alimentação,
+nem estabelecem a ordem precisa entre a interrupção da resposta e o reset.
+A restauração da sessão interrompida não foi confirmada por esses registros.
+
+Uma consulta posterior encontrou outro boot_id, calibração IDLE e aquisição
+liberada. Um ensaio somente de leitura completou 325 consultas STATUS/CAL_IMU
+STATUS em 75,15 s, sem reproduzir timeout ou reboot. Nesse ensaio os erros de
+I/O da IMU subiram de 152 para 313; o aumento merece investigação, mas não prova
+que causou os resets. Não foram iniciados movimentos, calibração ou SAVE no ensaio.
+
+Para distinguir as causas em nova ocorrência:
+
+- O firmware agora informa `reset_reason` em HELLO e STATUS, usando
+  `esp_reset_reason()` do ESP-IDF instalado. Códigos principais: 1=power-on,
+  3=reset por software, 4=panic/exceção, 5=watchdog de interrupção,
+  6=watchdog de tarefa, 7=outro watchdog, 9=brownout, 14=power glitch,
+  15=CPU lockup. Power-on sozinho não identifica a origem da perda de energia.
+- O cliente registra `response_timeout` no JSONL, com prazo, tempo de espera,
+  bytes parciais da linha e último estado confirmado. A mensagem também distingue
+  zero bytes de uma resposta parcial. Não há reenvio automático de comandos.
+- Após o próximo reset espontâneo, reconectar antes de reiniciar manualmente
+  preserva a oportunidade de ler seu motivo. Se houver panic/watchdog, o log
+  serial durante a ocorrência é necessário para localizar a falha/backtrace.
+
+Esses diagnósticos precisam de upload do novo firmware e reconstrução da imagem:
+
+```sh
+docker compose -f docker/compose.yaml build calibrate-imu
+docker compose -f docker/compose.yaml run --rm calibrate-imu
+```
+
+São instrumentos de diagnóstico, não uma correção comprovada da causa do reset.
+Aumentar `--timeout` não corrige reinícios da placa. A bancada ainda deve reproduzir
+a falha com motivo de reset e, quando disponível, log serial capturado.
+
+### Causa confirmada pelo panic e correção de pilha
+
+O log serial posteriormente fornecido pelo operador mostra `Stack protection
+fault` em `loopTask`, com SP `0x4ff3b870`, 28 bytes abaixo do limite inferior
+`0x4ff3b88c`. O ELF local tinha SHA-256
+`25ec63022ed8b5e1028a6fb267d39f5d7e3925b2eb2b12eab116584dfe45b261`,
+compatível com o prefixo `25ec63022` do panic. Nesse ELF, MEPC `0x4ff024c2`
+resolve para `esp_heap_adjust_alignment_to_hw`, e RA `0x4ff013f4` para
+`heap_caps_aligned_alloc_base`. São os pontos onde a proteção detectou o
+esgotamento de pilha; não constituem evidência de defeito no alocador ou falta
+de heap. Os demais valores do dump não foram tratados como backtrace validado.
+
+A inspeção das instruções de reserva de pilha no objeto RISC-V mostrou:
+
+| Frame compilado | Antes | Depois |
+| --- | ---: | ---: |
+| `lab::network_tick()` (inclui serviço TCP por inlining) | 2288 B | 272 B |
+| `command()` (inclui formatação de STATUS por inlining) | 2672 B | 656 B |
+| Soma desses dois frames aninhados | 4960 B | 928 B |
+
+A cadeia ainda chama processamento de calibração, formatação de floats e
+bibliotecas de rede/heap. Os 4960 bytes eram apenas parte do consumo numa pilha
+de aproximadamente 8 KiB. A correção remove os buffers automáticos de 2048 bytes
+do módulo de rede e usa um único workspace fixo adicional de 2048 bytes em BSS.
+A pilha configurada da tarefa não foi aumentada. O workspace pertence somente
+à loopTask; callbacks Wi-Fi continuam limitados a atomics. Cada resposta é
+copiada para `tx` ou `control` antes do reuso, preservando envios parciais,
+respostas TCP pendentes e comandos seriais.
+
+O módulo passou a rejeitar no build frames maiores que 1024 bytes com
+`-Wframe-larger-than=1024` como erro. Isso limita frames individuais, não mede
+a profundidade total da cadeia. Foi acrescentado teste de uma resposta de
+2003 bytes enviada em fragmentos de 17 bytes, com comando serial e resposta
+TCP pendente reutilizando o workspace; o conteúdo transmitido deve permanecer
+intacto. A suíte nativa com ASan/UBSan e o build `mm1_p4_lab` passaram.
+
+**Validação de bancada pendente:** gravar esse novo firmware, manter o log
+serial, repetir o procedimento de calibração e testar monitor/captura com
+respostas fracionadas. Confirmar ausência de panic/reset e o encerramento com
+restauração. Esta alteração corrige o consumo excessivo de pilha identificado;
+não trata separadamente os erros de I/O da IMU observados antes.

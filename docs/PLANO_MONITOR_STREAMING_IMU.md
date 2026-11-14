@@ -1,6 +1,6 @@
 # Plano de implementação: monitor de relatórios da IMU via TCP e Docker
 
-Documento de planejamento, criado em 10/11/2026. **A feature descrita aqui ainda deve ser implementada.** Este arquivo é autocontido e pode ser copiado para outro clone de `mm1-black` e usado como especificação/prompt de implementação. Todos os caminhos abaixo são relativos à raiz desse repositório, independentemente do diretório em que ele esteja clonado.
+Documento de planejamento, criado em 10/11/2026. **Implementado neste clone; operação, protocolo, testes executados e pendências de bancada estão em [LAB_MONITOR_IMU.md](LAB_MONITOR_IMU.md).** O conteúdo abaixo preserva a especificação original. Este arquivo é autocontido e pode ser copiado para outro clone de `mm1-black` e usado como especificação/prompt de implementação. Todos os caminhos abaixo são relativos à raiz desse repositório, independentemente do diretório em que ele esteja clonado.
 
 Base inspecionada: commit `06c0e068f262006b8133c6d1c15b9be652913092`. No clone de destino, conferir as instruções locais e os arquivos atuais antes de implementar; adaptar a integração se a revisão divergir, preservando os requisitos deste documento.
 
@@ -89,6 +89,13 @@ Validar finitude, norma e singularidades. Preservar a política existente de tol
 
 ### 4.2 Azimutes derivados dos vetores magnéticos
 
+**Errata de 13/11/2026:** o sinal lateral negativo da versão original estava
+incompatível com +Y à esquerda e azimute horário da frente +X. As fórmulas e os
+casos de teste abaixo foram corrigidos para `atan2(Nl,Nf)`. A correção foi
+verificada com vetores sintéticos de norte ENU transformados para o corpo,
+comparando o resultado com o azimute de produção em diferentes yaw/pitch/roll.
+Gravações anteriores conservam seus valores e o método original nos metadados.
+
 Não aplicar diretamente `atan2(Bx,By)` aos valores em eixos da IMU: a produção aplica `atan2(leste,norte)` ao **vetor frontal em coordenadas de mundo**, não ao vetor magnético no corpo. Uma transposição ingênua introduz inversões/saltos de 90°.
 
 Usar a direção vertical obtida do **GRV**, para compensar inclinação sem usar o rumo magnético do RV. Definir:
@@ -99,10 +106,10 @@ f = normalize((1,0,0) - dot((1,0,0),u)*u)  # frente projetada no plano horizonta
 l = cross(u,f)                            # esquerda horizontal
 Nf = dot(m,f)
 Nl = dot(m,l)
-azimuth_mag_deg = wrap360(degrees(atan2(-Nl,Nf)))
+azimuth_mag_deg = wrap360(degrees(atan2(Nl,Nf)))
 ```
 
-Aplicar uma vez com `m=Raw` e outra com `m=Uncalibrated`. A fórmula expressa o azimute horário da frente +X em relação à direção horizontal do campo. Com dispositivo nivelado, eixos +Y à esquerda e +Z para cima, reduz a `wrap360(degrees(atan2(-My,Mx)))`. O yaw arbitrário do GRV cancela no cálculo de `u`; não usar seu azimute como correção magnética.
+Aplicar uma vez com `m=Raw` e outra com `m=Uncalibrated`. A fórmula expressa o azimute horário da frente +X em relação à direção horizontal do campo. Com dispositivo nivelado, eixos +Y à esquerda e +Z para cima, reduz a `wrap360(degrees(atan2(My,Mx)))`. O yaw arbitrário do GRV cancela no cálculo de `u`; não usar seu azimute como correção magnética.
 
 Esta é uma extensão geométrica coerente com a convenção da produção, não uma rotina de magnetômetro já existente em `src/main.cpp`. Documentar e testar essa distinção.
 
@@ -248,7 +255,7 @@ Usar flush periódico limitado (por exemplo, 1 s) e ao sair; cabeçalho e metada
 
 - Decoder/caches com Raw/Uncalibrated/Calibrated/RV/GRV intercalados, duplicatas, valores inválidos e falha em apenas um grupo.
 - Frente +X: quaternion identidade → azimute 90°, inclinação 0°, roll 0°; rotação +90° em Z → azimute 0°. Pitch Euler +30° deve produzir inclinação exibida -30°; frente elevada 30° deve exibir +30°. Repetir para RV e GRV e verificar que nenhuma correção angular da produção é aplicada.
-- Azimute magnético nivelado: vetor +X → 0°, -Y → 90°, -X → 180°, +Y → 270°. Testar 0°/360° e quadrantes.
+- Azimute magnético nivelado: vetor +X → 0°, +Y → 90°, -X → 180°, -Y → 270°. Testar 0°/360° e quadrantes.
 - Compensação de inclinação com vetores sintéticos de campo e rotações conhecidas; alterar somente yaw do GRV não muda o azimute magnético calculado para o mesmo vetor/vertical. Testar transformação fixa dos eixos Raw, dependências antigas e singularidades.
 - START/STOP repetido, BUSY via TCP/serial, configuração parcialmente aplicada, rollback e restauração de intervalos não padrão.
 - Desconexão sem STOP, heartbeat perdido, reset IMU, envio parcial, cliente lento e STOP durante transmissão. Nenhuma confirmação falsa de restauração.

@@ -154,3 +154,22 @@ A amostra preservou `imu_status=0` e `accuracy_rad=3.14160156`. O sucesso da aqu
 A imagem fixa Python `3.12.14-slim-bookworm`; o cliente e os testes usam somente a biblioteca padrão. `requirements.txt` registra essa ausência de dependências externas e receberá versões fixadas quando necessário. Após editar scripts ou dependências, execute novamente o build.
 
 O contexto de build é exclusivamente este diretório. As próximas etapas ampliarão a captura para lotes, registro de poses e análise no mesmo ambiente. O submódulo existente em [`../kinova-geomagic-noetic-demo/`](../kinova-geomagic-noetic-demo/) será integrado no incremento 8; ele não é necessário para estes testes. A rede host será mantida nessa integração.
+
+## Monitor contínuo da IMU
+
+O serviço `monitor-imu` transmite Raw, Uncalibrated, Calibrated e ângulos de RV/GRV
+em sessão TCP persistente, sem ROS/laser. Veja o [guia operacional e o schema](../docs/LAB_MONITOR_IMU.md)
+para gravação opcional, retenção por campo, restauração e validação física pendente.
+O azimute Raw permanece indisponível até verificar seus eixos/escalas.
+
+```sh
+mkdir -p docker/data
+docker compose -f docker/compose.yaml build monitor-imu
+LAB_HOST=192.168.1.100 docker compose -f docker/compose.yaml run --rm monitor-imu --rate-hz 2 --save false
+LAB_HOST=192.168.1.100 docker compose -f docker/compose.yaml run --rm monitor-imu --save true --notes "Trena fixa; ímã"
+```
+
+A tela retém o último valor válido; `samples.csv` preenche somente campos com
+atualização válida naquele snapshot. `metadata.json` é escrito uma única vez no
+início. Ctrl+C/SIGTERM solicita STOP; desconexão/perda de heartbeat também restaura
+as configurações no firmware.
