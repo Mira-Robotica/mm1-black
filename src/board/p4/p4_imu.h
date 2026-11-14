@@ -52,6 +52,8 @@ struct P4ImuDiagnostics {
     int8_t probe_4b_rc = -1, probe_4a_rc = -1;
     int8_t probe_sda = -1, probe_scl = -1, rst_low = -1, rst_high = -1;
     uint32_t game_generation = 0, mag_generation = 0, epoch = 0;
+    uint32_t empty_rereads = 0;
+    const char *last_io_stage = "NONE";
 };
 bool p4_imu_snapshot(P4ImuSample *sample);
 bool p4_imu_game_snapshot(P4ImuGameSample *sample);

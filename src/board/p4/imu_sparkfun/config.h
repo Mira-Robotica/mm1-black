@@ -7,14 +7,14 @@
 #define MM1_LAB_IMU_I2C_PORT 1
 #define MM1_LAB_IMU_I2C_HZ 100000
 #define MM1_LAB_IMU_I2C_TIMEOUT_MS 50
-// Keep SparkFun's original transfer size while validating the P4 transport.
-#define MM1_LAB_IMU_I2C_BUFFER 32
+// Most five-report transfers fit in one payload read. Wire and the SH-2 HAL must agree.
+#define MM1_LAB_IMU_I2C_BUFFER 128
 #define MM1_LAB_IMU_RESET_WAIT_MS 150
 // Readiness window after releasing NRST; not an unconditional boot delay.
 #define MM1_LAB_IMU_PROBE_WINDOW_MS 500
 #define MM1_LAB_IMU_PROBE_INTERVAL_MS 10
 #define MM1_LAB_IMU_LIBRARY "SparkFun-1.0.6"
-#define MM1_LAB_IMU_REVISION "fd0149c+mm1.6"
+#define MM1_LAB_IMU_REVISION "fd0149c+mm1.7"
 
 #define MM1_LAB_STRINGIFY_(value) #value
 #define MM1_LAB_STRINGIFY(value) MM1_LAB_STRINGIFY_(value)

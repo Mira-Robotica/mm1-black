@@ -42,6 +42,9 @@
 
 #include "SparkFun_BNO08x_Arduino_Library.h"
 #if defined(MM1_LAB)
+#include <algorithm>
+#endif
+#if defined(MM1_LAB)
 #include "../../imu_sparkfun/config.h"
 #include "../../imu_sparkfun/hooks.h"
 #endif
@@ -1238,7 +1241,7 @@ static int i2chal_read(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len,
   uint8_t header[4];
   if (!i2c_read(header, 4)) {
 #if defined(MM1_LAB)
-    p4_sparkfun_io_error();
+    p4_sparkfun_io_error("READ_HEADER");
 #endif
     return 0;
   }
@@ -1297,7 +1300,7 @@ static int i2chal_read(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len,
 
     if (!i2c_read(i2c_buffer, read_size)) {
 #if defined(MM1_LAB)
-      p4_sparkfun_io_error();
+      p4_sparkfun_io_error("READ_CHUNK");
 #endif
       return 0;
     }
@@ -1307,6 +1310,14 @@ static int i2chal_read(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len,
     // different cargo or an invalid continuation into an otherwise valid advert.
     const uint16_t chunk_size = (uint16_t(i2c_buffer[0]) | (uint16_t(i2c_buffer[1]) << 8)) & 0x7fff;
     const uint16_t expected = first_read ? packet_size : cargo_remaining + 4;
+    // BNO086 can answer the payload request with a zero packet after a
+    // nonempty length probe. No payload has been accepted at this point.
+    // Re-probe independently; only a zero length on that probe proves drain.
+    if (first_read && std::all_of(i2c_buffer, i2c_buffer + read_size,
+                                  [](uint8_t b) { return b == 0; })) {
+      p4_sparkfun_empty_reread();
+      return 0;
+    }
     if (chunk_size != expected || i2c_buffer[2] != header[2]) {
       p4_sparkfun_rx_error("CHUNK", i2c_buffer, expected);
       return 0;
@@ -1355,7 +1366,7 @@ static int i2chal_write(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len) {
 
 #if defined(MM1_LAB)
   if (len > i2c_buffer_max) {
-    p4_sparkfun_io_error();
+    p4_sparkfun_io_error("WRITE_LENGTH");
     return SH2_ERR_IO; // Never report a truncated write as success.
   }
 #endif
@@ -1369,7 +1380,7 @@ static int i2chal_write(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len) {
 
   if (!i2c_write(pBuffer, write_size)) {
 #if defined(MM1_LAB)
-    p4_sparkfun_io_error();
+    p4_sparkfun_io_error("WRITE");
     return SH2_ERR_IO; // Zero means retry forever in SHTP, not an I/O failure.
 #endif
     return 0;
@@ -1621,7 +1632,7 @@ static int spihal_read(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len,
     return 0;
   }
   if (packet_size < 4 || packet_size > len) {
-    p4_sparkfun_io_error();
+    p4_sparkfun_io_error("SPI_HEADER");
     return 0;
   }
 #endif

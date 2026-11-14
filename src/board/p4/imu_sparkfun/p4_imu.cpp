@@ -149,7 +149,8 @@ void p4_sparkfun_probe_result(unsigned char addr, unsigned char rc)
         p4_sparkfun_stage(rc == 2 ? "NO_ACK" : rc == 5 ? "I2C_PROBE_TIMEOUT" : "I2C_PROBE_ERROR", SH2_ERR_IO);
     }
 }
-void p4_sparkfun_io_error() { ++diag.io_errors; }
+void p4_sparkfun_io_error(const char *stage) { ++diag.io_errors; diag.last_io_stage = stage; }
+void p4_sparkfun_empty_reread() { ++diag.empty_rereads; }
 void p4_sparkfun_empty_read() { ++diag.empty_reads; }
 void p4_sparkfun_feature(unsigned char id, unsigned long interval)
 {
@@ -172,7 +173,7 @@ void p4_sparkfun_protocol_error(unsigned char event)
 }
 void p4_sparkfun_rx_error(const char *stage, const unsigned char *header, unsigned expected)
 {
-    ++diag.io_errors;
+    p4_sparkfun_io_error(stage);
     if (error_logs++ < 4)
         Serial.printf("[LAB] IMU RX %s hdr=%02X %02X %02X %02X expected_len=%u\n",
             stage, header[0], header[1], header[2], header[3], expected);
@@ -306,7 +307,15 @@ void p4_imu_poll()
 {
     if (reset_pending) { p4_imu_begin(address); return; }
     if (!ready) return;
-    sh2_service();
+    // sh2_service reads at most one SHTP transfer. Process a burst before
+    // the loop sleeps so the five enabled reports can reach the empty barrier.
+    const uint32_t started = millis(), empty = diag.empty_reads;
+    const uint32_t errors = diag.io_errors, decode = diag.decode_errors;
+    for (unsigned i = 0; i < 8; ++i) {
+        sh2_service();
+        if (reconfigure || diag.empty_reads != empty || diag.io_errors != errors ||
+            diag.decode_errors != decode || millis() - started >= 8) break;
+    }
     if (reconfigure) {
         reconfigure = false;
         p4_imu_lab_invalidate();

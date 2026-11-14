@@ -128,7 +128,7 @@ void format_status(char *out, size_t size)
              "imu_probe_4b_rc=%d imu_probe_4a_rc=%d imu_probe_attempts=%lu imu_probe_ms=%lu "
              "imu_probe_sda=%d imu_probe_scl=%d imu_rst_low=%d imu_rst_high=%d "
              "imu_epoch=%lu grv_reports=%lu mag_reports=%lu grv_sequence_gaps=%lu mag_sequence_gaps=%lu "
-             "rv_us=%lu grv_us=%lu mag_us=%lu rv_confirmed_us=%ld grv_confirmed_us=%ld mag_confirmed_us=%ld stream_state=%s stream_session_id=%lu\n",
+             "rv_us=%lu grv_us=%lu mag_us=%lu rv_confirmed_us=%ld grv_confirmed_us=%ld mag_confirmed_us=%ld imu_empty_reads=%lu imu_empty_rereads=%lu imu_last_io_stage=%s stream_state=%s stream_session_id=%lu\n",
              state_name(), ip.c_str(), online ? static_cast<long>(WiFi.RSSI()) : 0L,
              server_started ? "LISTENING" : "OFF", static_cast<unsigned>(LAB_TCP_PORT),
              static_cast<unsigned>(hostedIsInitialized()),
@@ -148,7 +148,8 @@ void format_status(char *out, size_t size)
              (unsigned long)product.game.sequence_gaps, (unsigned long)product.mag.sequence_gaps,
              (unsigned long)product.rv_interval_us, (unsigned long)product.game_interval_us,
              (unsigned long)product.mag_interval_us, (long)product.rv_confirmed_us,
-             (long)product.game_confirmed_us, (long)product.mag_confirmed_us, lab::stream_state(), (unsigned long)lab::stream_session_id());
+             (long)product.game_confirmed_us, (long)product.mag_confirmed_us,
+             (unsigned long)imu.empty_reads, (unsigned long)imu.empty_rereads, imu.last_io_stage, lab::stream_state(), (unsigned long)lab::stream_session_id());
 }
 
 void command(const char *line, bool from_serial)
