@@ -23,6 +23,8 @@ struct HardwareSerial {
     int read() { auto b = fake_rx.front(); fake_rx.pop_front(); return b; }
 };
 struct DebugSerial {
+    int available() { return 0; }
+    int read() { return -1; }
     template<typename... T> void printf(const char *, T...) {}
     template<typename... T> void print(T...) {}
     template<typename... T> void println(T...) {}

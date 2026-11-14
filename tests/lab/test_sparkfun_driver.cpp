@@ -99,6 +99,34 @@ int main()
     report(0); p4_imu_poll(); assert(p4_imu_diagnostics().generation==generation+1);
     assert(p4_imu_diagnostics().game_generation==game_generation+1 && p4_imu_diagnostics().mag_generation==mag_generation+1);
     assert(!p4_imu_diagnostics().sequence_gaps);
+    // Streaming caches decode native Raw counts/timestamp and uncalibrated Q4,
+    // including low status. Bias is deliberately NOT subtracted.
+    std::vector<uint8_t> mixed(51,0);
+    mixed[0]=0xfb; mixed[5]=0x16; mixed[6]=77;
+    mixed[9]=0xff; mixed[10]=0xff; mixed[11]=2; mixed[13]=3; mixed[17]=0x78; mixed[18]=0x56;
+    mixed[21]=0x0f; mixed[22]=88; mixed[25]=0xa0; mixed[27]=0x40; mixed[28]=1;
+    mixed[29]=0xe0; mixed[30]=1; mixed[31]=0x50; // x=10 y=20 z=30 biasX=5
+    mixed[37]=5; mixed[38]=1; // invalid zero-norm RV, must retain the good cache
+    const auto good_rv=p4_imu_stream_sample(3);
+    packet(3,mixed);p4_imu_poll();
+    const auto raw=p4_imu_stream_sample(0),uncal=p4_imu_stream_sample(1);
+    assert(raw.valid && raw.v[0]==-1 && raw.v[1]==2 && raw.v[2]==3 && raw.raw_timestamp_us==0x5678);
+    assert(raw.status==0 && raw.epoch==p4_imu_diagnostics().epoch);
+    assert(uncal.valid && uncal.v[0]==10 && uncal.v[1]==20 && uncal.v[2]==30 && uncal.status==0);
+    assert(p4_imu_stream_sample(3).generation==good_rv.generation);
+    assert(p4_imu_stream_sample(2).valid && p4_imu_stream_sample(4).valid);
+    packet(3,mixed);p4_imu_poll();
+    assert(p4_imu_stream_sample(0).generation==raw.generation && p4_imu_stream_sample(1).generation==uncal.generation);
+    mixed[6]++; mixed[9]=7; mixed[10]=0; // only Raw changes
+    packet(3,mixed);p4_imu_poll();
+    assert(p4_imu_stream_sample(0).v[0]==7 && p4_imu_stream_sample(1).generation==uncal.generation);
+    // Full asynchronous feature snapshot, including flags/batching/specific config.
+    assert(sh2_lab_get_feature(0x16)==SH2_OK);
+    packet(2,{0xfc,0x16,15,7,0,0x10,0x27,0,0,0xd2,4,0,0,42,0,0,0});p4_imu_poll();
+    const auto feature=p4_imu_feature(0);
+    assert(feature.known && feature.generation==1 && feature.config.reportInterval_us==10000);
+    assert(feature.config.batchInterval_us==1234 && feature.config.sensorSpecific==42 && feature.config.changeSensitivity==7);
+    assert(feature.config.changeSensitivityEnabled && feature.config.changeSensitivityRelative && feature.config.wakeupEnabled && feature.config.alwaysOnEnabled);
     const auto before=p4_imu_diagnostics();
     p4_imu_poll(); assert(p4_imu_diagnostics().empty_reads==before.empty_reads+1);
     fake_wire_read_error=true; p4_imu_poll(); fake_wire_read_error=false;
@@ -117,6 +145,7 @@ int main()
     assert(p4_imu_diagnostics().resets==before.resets+1 && saves==2);
     assert(p4_imu_diagnostics().epoch==before.epoch+1);
     assert(!p4_imu_game_snapshot(&game) && !p4_imu_mag_snapshot(&mag));
+    for (unsigned g=0;g<5;++g) assert(!p4_imu_stream_sample(g).valid && !p4_imu_feature(g).known);
     assert(p4_imu_lab_info().rv_confirmed_us==-1);
     assert(p4_imu_lab_info().game_interval_us==20000 && p4_imu_lab_info().mag_interval_us==20000);
     assert(p4_imu_ok() && p4_imu_lab_info().autosave_rc==0);

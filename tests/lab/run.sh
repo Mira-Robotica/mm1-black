@@ -58,3 +58,15 @@ done
     "$test_dir/sh2.o" "$test_dir/shtp.o" "$test_dir/sh2_SensorValue.o" "$test_dir/sh2_util.o" \
     -o "$test_dir/sparkfun"
 "$test_dir/sparkfun"
+
+"${CXX:-g++}" -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -DMM1_LAB=1 -I tests/lab/stubs -I src -I include \
+    tests/lab/test_stream.cpp src/lab/stream_service.cpp src/lab/orientation.cpp \
+    -o "$test_dir/stream"
+"$test_dir/stream"
+
+"${CXX:-g++}" -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -DMM1_LAB=1 -I tests/lab/network_stubs -I tests/lab/stubs -I src -I include \
+    tests/lab/test_stream_network.cpp src/lab/capture_format.cpp \
+    -o "$test_dir/stream-network"
+"$test_dir/stream-network"

@@ -277,6 +277,31 @@ class CalibrationClientTests(unittest.TestCase):
                 with self.assertRaises((cal.ProtocolError, TimeoutError)): m.exchange("CAL_IMU SAVE 1")
                 self.assertTrue(m.save_attempted)
 
+    def test_timeout_records_partial_reply_without_retry(self):
+        for partial in (b"", b"# OK CAL_IMU action=STATUS"):
+            def server(conn):
+                conn.sendall(HELLO + META)
+                self.assertEqual(read(conn), "CAL_IMU STATUS")
+                if partial:
+                    conn.sendall(partial)
+                time.sleep(0.15)
+                self.assertIsNone(read(conn))  # No retry, CANCEL or SAVE.
+            with self.subTest(partial=partial), peer(server) as port:
+                with socket.create_connection(("127.0.0.1", port)) as sock:
+                    journal = MemoryJournal()
+                    m = cal.Monitor(sock, 0.05, journal)
+                    m.handshake()
+                    m.current = sample()
+                    with self.assertRaisesRegex(TimeoutError, f"{len(partial)} bytes recebidos"):
+                        m.exchange("CAL_IMU STATUS")
+                    event = journal.events[-1]
+                    self.assertEqual(event["event"], "response_timeout")
+                    self.assertEqual(event["partial_hex"], partial.hex())
+                    self.assertEqual(event["partial_bytes"], len(partial))
+                    self.assertEqual(event["last_state"], sample())
+                    self.assertEqual(m.awaiting_reply, "CAL_IMU STATUS")
+                    self.assertFalse(m.save_attempted)
+
     def test_log_records_clock_and_instruction_and_fails_before_send(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "cal.jsonl"
