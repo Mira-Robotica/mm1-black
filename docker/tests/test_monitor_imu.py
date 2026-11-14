@@ -20,7 +20,7 @@ import monitor_imu as m
 FIXTURES = Path(__file__).parent / "fixtures"
 STREAM_META = (FIXTURES / "stream_meta.txt").read_text()
 HELLO = "# HELLO MM1LAB 3 stage=multi_report_capture boot_id=0123456789abcdef connection_id=1\n"
-META = "# META capture=single commands=STATUS,CAPTURE,CAPTURE_IMU,CAL_IMU,STREAM_IMU schema=3 stream_imu=1 stream_schema=1\n"
+META = "# META capture=single commands=STATUS,CAPTURE,CAPTURE_IMU,CAL_IMU,STREAM_IMU schema=3 stream_imu=1 stream_schema=2\n"
 
 
 def command(conn):
@@ -52,9 +52,9 @@ def finish(conn, restored=1):
     conn.sendall(f"# {kind} STREAM_IMU STOP session_id=7 restored={restored} code=NONE\n".encode())
 
 
-def row(seq=1, new=98303, groups=31, **changes):
-    cells = ["7", str(seq), "1000", str(groups), "98303", str(new)] + ["0"] * 5
-    cells += ["1", "2", "3", "10", "20", "30", "40", "50", "60", "90", "-30", "0", "90", "30", "0", "", "270"]
+def row(seq=1, new=524287, groups=31, **changes):
+    cells = ["7", str(seq), "1000", str(groups), "524287", str(new)] + ["0"] * 5
+    cells += ["1", "2", "3", "10", "20", "30", "40", "50", "60", "90", "-30", "0", "90", "30", "0", "270", "2", "3", "0.05"]
     for key, value in changes.items():
         cells[(m.ENVELOPE + m.VALUES).index(key)] = str(value)
     return ",".join(cells)
@@ -70,7 +70,7 @@ class MonitorTests(unittest.TestCase):
         meta = m.parse_stream_meta(STREAM_META.strip(), 7)
         self.assertEqual(meta["raw_mapping"], "unknown")
         self.assertTrue(meta["previous"].startswith("0/1234/15/7/42"))
-        for replacement in (STREAM_META.replace("schema=1", "schema=2"),
+        for replacement in (STREAM_META.replace("schema=2", "schema=1"),
                             STREAM_META.replace("front=+X", "front=+Y"),
                             STREAM_META.replace("angular_correction=none", "angular_correction=declination")):
             with self.assertRaises(m.ProtocolError):
@@ -88,8 +88,9 @@ class MonitorTests(unittest.TestCase):
         samples = m.Samples(7)
         first = samples.accept(row())
         self.assertEqual(first[10], -30)
-        self.assertIsNone(first[15])
-        self.assertEqual(samples.accept(row(2, new=0, groups=0)), [None] * 17)
+        self.assertEqual(first[15], 270)
+        self.assertEqual(first[16:], [2, 3, 0.05])
+        self.assertEqual(samples.accept(row(2, new=0, groups=0)), [None] * 19)
         self.assertEqual(samples.retained, first)
         fresh = samples.accept(row(3, mag_raw_y_adc="nan", rv_azimuth_deg="nan", rv_inclination_deg=45))
         self.assertEqual(fresh[:3], [None] * 3)
@@ -98,6 +99,15 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(fresh[10], 45)
         self.assertEqual(samples.retained[:3], [1, 2, 3])
         self.assertEqual(samples.retained[9], 90)
+
+    def test_quality_is_retained_independently_and_validated(self):
+        samples = m.Samples(7)
+        samples.accept(row())
+        fresh = samples.accept(row(2, rv_status=4, grv_status=1.5, rv_accuracy_rad=-1))
+        self.assertEqual(fresh[16:], [None, None, None])
+        self.assertEqual(samples.retained[16:], [2, 3, 0.05])
+        fresh = samples.accept(row(3, rv_status=0, grv_status=0, rv_accuracy_rad=0))
+        self.assertEqual(fresh[16:], [0, 0, 0])
 
     def test_structural_corruption_and_old_sessions_are_discarded(self):
         samples = m.Samples(7)
@@ -170,7 +180,7 @@ class MonitorTests(unittest.TestCase):
             self.assertEqual(rows[0], ["elapsed_s"] + m.VALUES)
             self.assertEqual(len(rows), 3)
             self.assertEqual(rows[2][1:4], ["5.0", "2.0", "3.0"])
-            self.assertEqual(rows[2][4:], [""] * 14)
+            self.assertEqual(rows[2][4:], [""] * 16)
             # A second execution never overwrites a previous directory.
             other = m.Recording(self.args(root=root, save=True), {})
             other.close()

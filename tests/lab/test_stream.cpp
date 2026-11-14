@@ -166,20 +166,20 @@ int main() {
     assert(cmd("STREAM_IMU START rate_hz=2").find("BUSY")!=std::string::npos);
     assert(cmd("STREAM_IMU STOP session_id="+std::to_string(id),2).find("NOT_OWNER")!=std::string::npos);
     sample(0,{1,2,3});sample(1,{30,0,2});sample(2,{20,1,2});sample(3,{1,0,0,0});sample(4,{1,0,0,0});tick();
-    auto row=cells(output());assert(row.size()==28);
-    assert(row[3]=="31" && row[4]=="98303" && row[5]=="98303"); // all except Raw azimuth
-    assert(row[20]=="90" && row[21]=="0" && row[26].empty());
-    near(std::stof(row[27]),0);
+    auto row=cells(output());assert(row.size()==30);
+    assert(row[3]=="31" && row[4]=="524287" && row[5]=="524287"); // all except Raw azimuth
+    assert(row[20]=="90" && row[21]=="0" && row[27]=="0" && row[28]=="0");
+    near(std::stof(row[26]),2.862405f);
     // Replace an entirely unsent snapshot: preserve all novelty bits but use
     // the newest Raw measurement; no growing queue of old publications.
     sample(0,{7,8,9});tick(100);row=cells(output(true));
-    assert(row[3]=="31" && row[5]=="98303" && row[11]=="7");
+    assert(row[3]=="31" && row[5]=="524287" && row[11]=="7");
     tick(100);row=cells(output());assert(row[3]=="0" && row[5]=="0" && row[11]=="7");
     // Only new GRV cannot update magnetic heading. Singular angle retains old azimuth/roll.
     sample(4,{vertical[0],0,vertical[2],0});tick(100);row=cells(output());
-    assert(row[5]==std::to_string(1<<13));near(std::stof(row[24]),-90);assert(row[23]=="90");
-    sample(1,{0,-30,0});tick(100);row=cells(output());
-    assert(!(std::stoul(row[5])&(1<<16)));near(std::stof(row[27]),0); // stale GRV
+    assert(row[5]==std::to_string((1<<13)|(1<<17)));near(std::stof(row[24]),-90);assert(row[23]=="90");
+    sample(2,{0,-30,0});tick(100);row=cells(output());
+    assert(!(std::stoul(row[5])&(1<<15)));near(std::stof(row[26]),2.862405f); // stale GRV
     stop(id);assert(!cal_sets);
     // A queued pre-write response must not conclude configuration/restoration.
     cmd("STREAM_IMU START rate_hz=2"); tick(12);
