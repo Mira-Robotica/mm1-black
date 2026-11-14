@@ -1,5 +1,6 @@
 <?xml version="1.0"?>
 <launch>
+  <arg name="coordinator" default="experiment_node.py"/>
   <arg name="execution_mode" default="rviz"/>
   <arg name="trena_mode" default="$(eval 'tcp' if arg('execution_mode') == 'hardware' else 'simulated')"/>
   <arg name="trena_host" default="$(eval optenv('LAB_HOST') or '127.0.0.1')"/>
@@ -28,7 +29,7 @@
     <arg name="robot_name" value="$(arg robot_name)"/>
     <arg name="vision" value="$(arg vision)"/>
   </include>
-  <node pkg="mm1_experiment" type="experiment_node.py" name="mm1_experiment"
+  <node pkg="mm1_experiment" type="$(arg coordinator)" name="mm1_experiment"
         output="screen" required="true"
         args="--use-laser $(arg use_laser) --captures-per-pose $(arg captures_per_pose) --execution-mode $(arg execution_mode) --trena-mode $(arg trena_mode) --host '$(arg trena_host)' --port $(arg trena_port) --timeout $(arg timeout) --hold-sec $(arg hold_sec) --first-tilt-deg $(arg first_tilt_deg) --output-dir '$(arg output_dir)'">
     <param name="robot_name" value="$(arg robot_name)"/>

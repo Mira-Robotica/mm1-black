@@ -12,6 +12,7 @@ import time
 import uuid
 
 import status
+import experiment_protocol as protocol
 from experiment_orientation import analyze_capture, rotation_error_deg
 from experiment_robot import ROOT, SWEEP_SCRIPTS, SimulatedRobot
 
@@ -104,7 +105,8 @@ class SimulatedTrena:
                                  orientation_session={"boot_id": "0000000000000000", "imu_epoch": 0})
 
 
-def run_experiment(robot, trena, journal, metadata, first_capture_id=1, captures_per_pose=1):
+def run_experiment(robot, trena, journal, metadata, first_capture_id=1, captures_per_pose=1,
+                   experiment_number=None):
     """Fixed acquisition attempts; motion, stability and storage failures remain fatal."""
     if type(captures_per_pose) is not int or not 1 <= captures_per_pose <= 20:
         raise ValueError("captures_per_pose must be between 1 and 20")
@@ -140,6 +142,7 @@ def run_experiment(robot, trena, journal, metadata, first_capture_id=1, captures
         robot.prepare()
         for index, target in enumerate(robot.poses):
             pose_id = f"pose_{index:03d}"
+            fields = protocol.pose_fields(experiment_number, index, target) if experiment_number else {}
             accepted_count = 0
             sensor_valid_counts = dict(laser=0, imu=0, grv=0, mag=0)
             for attempt in range(captures_per_pose):
@@ -149,7 +152,7 @@ def run_experiment(robot, trena, journal, metadata, first_capture_id=1, captures
                            attempt_index=attempt + 1, attempts_requested=captures_per_pose,
                            target_joints_deg=list(target), pc_started_utc=status.utc_now(),
                            phase="move" if attempt == 0 else "capture",
-                           exchange_complete=False, accepted=False, trena={})
+                           exchange_complete=False, accepted=False, trena={}, **fields)
                 began = time.monotonic()
                 try:
                     if attempt == 0:
@@ -233,7 +236,7 @@ def run_experiment(robot, trena, journal, metadata, first_capture_id=1, captures
                   orientation_sessions_must_be_analyzed_separately=True,
                   product_improvement_required=accepted_count < captures_per_pose,
                   outcome="ok" if accepted_count == captures_per_pose else
-                          "partial" if accepted_count else "no_valid_capture")
+                          "partial" if accepted_count else "no_valid_capture", **fields)
             if accepted_count < captures_per_pose:
                 poses_with_failures.append(pose_id)
             if accepted_count == 0:
@@ -241,6 +244,8 @@ def run_experiment(robot, trena, journal, metadata, first_capture_id=1, captures
             saved_poses += 1
             print(f"Pose {index + 1}/{len(robot.poses)} concluída: "
                   f"{accepted_count}/{captures_per_pose} capturas aceitas", flush=True)
+            if experiment_number == 3:
+                protocol.pause_after_cycle(index, target, robot, write)
         write("end", outcome="complete_with_failures" if failed_captures else "complete",
               **totals(), elapsed_ms=(time.monotonic() - started) * 1000)
         robot.finish()
@@ -262,7 +267,7 @@ def run_experiment(robot, trena, journal, metadata, first_capture_id=1, captures
         robot.stop()
 
 
-def main(argv=None):
+def main(argv=None, experiment_number=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--execution-mode", choices=("simulated", "rviz", "hardware"), default="simulated")
     parser.add_argument("--trena-mode", choices=("simulated", "tcp"), default=None)
@@ -278,6 +283,9 @@ def main(argv=None):
     parser.add_argument("--log", type=Path)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "docker/data")
     args = parser.parse_args(argv)
+    if experiment_number:
+        args.experiment_number = experiment_number
+        args.use_laser = False
     args.trena_mode = args.trena_mode or ("tcp" if args.execution_mode == "hardware" else "simulated")
     if args.trena_mode == "tcp" and not args.host:
         parser.error("TCP requires --host or LAB_HOST")
@@ -287,6 +295,8 @@ def main(argv=None):
         robot = SimulatedRobot(args.first_tilt_deg, args.hold_sec)
     except ValueError as exc:
         parser.error(str(exc))
+    if experiment_number:
+        robot.poses = protocol.build_targets()
     if not 1 <= args.captures_per_pose <= 20:
         parser.error("captures-per-pose must be between 1 and 20")
     if not 1 <= args.first_capture_id <= 0xFFFFFFFF - len(robot.poses) * args.captures_per_pose + 1:
@@ -307,7 +317,10 @@ def main(argv=None):
             rospy.init_node("mm1_experiment")
             rospy.set_param("~hold_sec", args.hold_sec)
             rospy.set_param("~first_tilt_deg", args.first_tilt_deg)
-            robot = hardware_robot() if args.execution_mode == "hardware" else RvizRobot()
+            robot = (hardware_robot(track_roll=bool(experiment_number))
+                     if args.execution_mode == "hardware" else RvizRobot())
+            if experiment_number:
+                robot.poses = protocol.build_targets()
             metadata["robot_parameters"] = rospy.get_param("~", {})
             if args.execution_mode == "hardware":
                 metadata["motion_parameters"] = {key: getattr(robot, key) for key in (
@@ -316,7 +329,8 @@ def main(argv=None):
         trena = (TcpTrena(args.host, args.port, args.timeout, args.use_laser)
                  if args.trena_mode == "tcp" else SimulatedTrena(args.use_laser))
         print(f"Registro: {args.log}", flush=True)
-        return run_experiment(robot, trena, journal, metadata, args.first_capture_id, args.captures_per_pose)
+        return run_experiment(robot, trena, journal, metadata, args.first_capture_id,
+                              args.captures_per_pose, experiment_number)
     except (Exception, KeyboardInterrupt) as exc:
         print(f"ERRO ao iniciar experimento: {exc}", file=sys.stderr)
         return 130 if isinstance(exc, KeyboardInterrupt) else 1

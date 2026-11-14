@@ -1,0 +1,37 @@
+<launch>
+  <arg name="execution_mode" default="rviz" />
+  <arg name="trena_mode" default="$(eval 'tcp' if arg('execution_mode') == 'hardware' else 'simulated')" />
+  <arg name="trena_host" default="$(eval optenv('LAB_HOST') or '127.0.0.1')" />
+  <arg name="trena_port" default="$(optenv LAB_PORT 5000)" />
+  <arg name="timeout" default="$(optenv LAB_TIMEOUT 5)" />
+  <arg name="output_dir" default="/data" />
+  <arg name="robot_ip" default="192.168.1.10" />
+  <arg name="robot_name" default="my_gen3" />
+  <arg name="start_driver" default="true" />
+  <arg name="start_rviz" default="true" />
+  <arg name="vision" default="true" />
+  <arg name="hold_sec" default="1.0" />
+  <arg name="visual_move_sec" default="2.0" />
+  <arg name="position_tolerance_deg" default="0.1" />
+  <arg name="velocity_tolerance_deg_s" default="0.5" />
+  <include file="$(find mm1_experiment)/launch/experiment.launch">
+    <arg name="execution_mode" value="$(arg execution_mode)" />
+    <arg name="trena_mode" value="$(arg trena_mode)" />
+    <arg name="trena_host" value="$(arg trena_host)" />
+    <arg name="trena_port" value="$(arg trena_port)" />
+    <arg name="timeout" value="$(arg timeout)" />
+    <arg name="output_dir" value="$(arg output_dir)" />
+    <arg name="robot_ip" value="$(arg robot_ip)" />
+    <arg name="robot_name" value="$(arg robot_name)" />
+    <arg name="start_driver" value="$(arg start_driver)" />
+    <arg name="start_rviz" value="$(arg start_rviz)" />
+    <arg name="vision" value="$(arg vision)" />
+    <arg name="hold_sec" value="$(arg hold_sec)" />
+    <arg name="visual_move_sec" value="$(arg visual_move_sec)" />
+    <arg name="position_tolerance_deg" value="$(arg position_tolerance_deg)" />
+    <arg name="velocity_tolerance_deg_s" value="$(arg velocity_tolerance_deg_s)" />
+    <arg name="coordinator" value="experiment_2_node.py" />
+    <arg name="use_laser" value="false" />
+    <arg name="captures_per_pose" value="5" />
+  </include>
+</launch>

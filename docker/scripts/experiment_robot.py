@@ -11,7 +11,7 @@ from experiment_orientation import from_kortex_euler
 ROOT = Path(__file__).resolve().parents[2]
 SWEEP_SCRIPTS = ROOT / "kinova-geomagic-noetic-demo/catkin_ws/src/kinova_geomagic_demo/scripts"
 sys.path.insert(0, str(SWEEP_SCRIPTS))
-from spherical_sweep_sequence import build_poses
+from spherical_sweep_sequence import angular_delta, build_poses
 
 
 class SimulatedRobot:
@@ -64,7 +64,7 @@ class RvizRobot(SimulatedRobot):
         raise RuntimeError("Missing RViz joint-state subscriber or ROS shutdown")
 
     def move_and_settle(self, target, index):
-        if index:
+        if index or any(target):
             self.current = self.preview.animate(self.current, target, self.preview.duration, True)
             if self.current is None:
                 raise RuntimeError("RViz execution interrupted")
@@ -77,7 +77,7 @@ class RvizRobot(SimulatedRobot):
         return state
 
 
-def hardware_robot():
+def hardware_robot(track_roll=False):
     import rospy
     from kinova_spherical_sweep import KinovaSphericalSweep
 
@@ -87,6 +87,8 @@ def hardware_robot():
             self.experiment_complete = False
             self.stop_lock = threading.Lock()
             self.stop_requested = False
+            self.roll_start = None
+            self.roll_travel = self.roll_peak = 0.0
             self.measured = None
             self.capture_target = None
             self.capture_error = None
@@ -127,6 +129,13 @@ def hardware_robot():
                 if self.motion_error or self.feedback is None:
                     return
                 received, positions, velocities = self.feedback
+                if self.roll_start is not None:
+                    self.roll_travel += angular_delta(positions[6], self.roll_start)
+                    self.roll_start = positions[6]
+                    self.roll_peak = max(self.roll_peak, self.roll_travel)
+                    if self.roll_travel < self.roll_peak - 1 or self.roll_travel > self.roll_expected + 1:
+                        self.motion_error = "J7 moved outside the intended positive rotation"
+                        return
                 if not all(math.isfinite(v) for v in xyz + theta):
                     self.motion_error = "Nonfinite measured TCP pose"
                     return
@@ -166,6 +175,15 @@ def hardware_robot():
         def move_and_settle(self, target, index):
             if rospy.is_shutdown():
                 raise RuntimeError("ROS execution interrupted")
+            if track_roll and index:
+                with self.lock:
+                    current = self.feedback[1][6]
+                    delta = angular_delta(target[6], current)
+                    self.roll_start = current
+                    self.roll_travel = self.roll_peak = 0.0
+                    self.roll_expected = max(0.0, delta)
+                target = list(target)
+                target[6] = current + delta
             self.send_pose(target, track_j5=index > 0)
             self.hold_pose(target)
             self.snapshot()
