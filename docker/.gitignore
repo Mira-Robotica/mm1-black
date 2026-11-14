@@ -3,3 +3,6 @@ data/*
 !data/.gitkeep
 __pycache__/
 *.pyc
+
+# Ensaio de ímã de 14/11/2026, com dados e relatório versionados.
+!data/20261114T184620.052565Z_989139b4503646d4bc42b772811b4063/
