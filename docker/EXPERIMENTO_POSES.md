@@ -1,5 +1,20 @@
 # Coordenador de captura por pose — incrementos 7 e 8
 
+## Experimentos 2 e 3 do PFC (numeração atual)
+
+A partir de `mm1-black`, execute a prévia do experimento desejado:
+
+```bash
+docker compose -f docker/compose.experiment.yaml run --rm experiment roslaunch mm1_experiment experiment_2.launch
+docker compose -f docker/compose.experiment.yaml run --rm experiment roslaunch mm1_experiment experiment_3.launch
+```
+
+Para a execução física, acrescente `execution_mode:=hardware robot_ip:=<IP_DO_KINOVA> trena_host:=<IP_DA_TRENA>` ao comando escolhido, substituindo os endereços. Os dois experimentos usam cinco tentativas de captura somente da IMU por parada e gravam um JSONL em `docker/data`. Prepare a trena antes do Experimento 2 e mantenha sua alimentação e calibração ao passar ao Experimento 3.
+
+Cada execução começa em (J5, J6, J7) = (0°, 90°, 270°) e percorre três ciclos de 164 etapas, com um único lote inicial. O Experimento 2 segue até o final sem ímã. No Experimento 3, use um terminal interativo do Compose. Comece sem ímã. Após o primeiro ciclo, posicione o ímã no tripé e pressione Enter. Após o segundo, retire o ímã e pressione Enter. Os eventos `pause_start` e `pause_confirmed` identificam as intervenções no JSONL.
+
+## Piloto de 43 poses
+
 O coordenador `scripts/experiment.py` importa o cliente `status.py` e reutiliza
 os 43 waypoints do submódulo `kinova-geomagic-noetic-demo`. Há um contêiner com
 o coordenador, driver Kortex e RViz opcional. Cliente da Trena e coordenador
