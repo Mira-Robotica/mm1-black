@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <esp32-hal-hosted.h>
 #include <esp_random.h>
+#include <esp_system.h>
 #include <lwip/sockets.h>
 #include <stdio.h>
 #include <string.h>
@@ -15,6 +16,11 @@
 #include "capture_service.h"
 #include "calibration_service.h"
 #include "stream_service.h"
+
+// Keep headroom for libc float formatting and network/heap calls on loopTask.
+// Fail the build if a local packet buffer grows a network frame again.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic error "-Wframe-larger-than=1024"
 
 static_assert(LAB_TCP_PORT > 0 && LAB_TCP_PORT <= 65535, "Invalid TCP port");
 static_assert(LAB_WIFI_CONNECT_TIMEOUT_MS > 0 && LAB_WIFI_CONNECT_TIMEOUT_MS < 0x80000000UL,
@@ -39,6 +45,11 @@ LabLineReader tcp_line;
 LabLineReader serial_line;
 char tx[2048]{};
 char control[2048]{};
+// Only loopTask formats replies; the Wi-Fi callback just updates atomics.
+// A shared workspace keeps 2 KiB buffers out of nested network/command frames.
+// queue_reply copies into tx/control before another producer reuses this memory.
+// Do not use this workspace from callbacks or concurrent tasks.
+char workspace[sizeof(tx)]{};
 bool tx_snapshot=false;
 enum class Owner { None, Tcp, Serial };
 Owner owner = Owner::None;
@@ -110,7 +121,7 @@ void format_status(char *out, size_t size)
     snprintf(out, size,
              "# OK STATUS stage=multi_report_capture wifi=%s ip=%s rssi_dbm=%ld "
              "tcp=%s port=%u hosted=%u sensors=ENABLED "
-             "attempt=%lu disconnect_reason=%u uptime_ms=%lu state=%s laser=%s imu=%s "
+             "attempt=%lu disconnect_reason=%u reset_reason=%u uptime_ms=%lu state=%s laser=%s imu=%s "
              "imu_reports=%lu imu_resets=%lu imu_io_errors=%lu imu_decode_errors=%lu imu_sequence_gaps=%lu n_max=1 calibration=%s calibration_blocked=%u "
              "imu_init=%s imu_init_rc=%d imu_addr=0x%02X " MM1_LAB_IMU_META
              "imu_hw_resets=%lu imu_init_ms=%lu imu_part=%lu imu_fw=%u.%u.%u imu_build=%lu "
@@ -121,7 +132,7 @@ void format_status(char *out, size_t size)
              state_name(), ip.c_str(), online ? static_cast<long>(WiFi.RSSI()) : 0L,
              server_started ? "LISTENING" : "OFF", static_cast<unsigned>(LAB_TCP_PORT),
              static_cast<unsigned>(hostedIsInitialized()),
-             static_cast<unsigned long>(attempt), disconnect_reason.load(),
+             static_cast<unsigned long>(attempt), disconnect_reason.load(), static_cast<unsigned>(esp_reset_reason()),
              static_cast<unsigned long>(millis()), lab::calibration_blocks_capture() ? "CALIBRATING" : lab::capture_state(), lab::laser_state(),
              imu.ready ? "READY" : "NOT_READY", (unsigned long)imu.generation,
              (unsigned long)imu.resets, (unsigned long)imu.io_errors,
@@ -142,7 +153,7 @@ void format_status(char *out, size_t size)
 
 void command(const char *line, bool from_serial)
 {
-    char reply[sizeof(tx)];
+    auto &reply = workspace;
     if (strcmp(line, "STATUS") == 0) {
         format_status(reply, sizeof(reply));
     } else if (strncmp(line, "STREAM_IMU", 10) == 0) {
@@ -218,9 +229,9 @@ void service_tcp()
             client.setNoDelay(true);
             client_activity = millis();
             ++connection_id;
-            char hello[sizeof(tx)];
+            auto &hello = workspace;
             snprintf(hello, sizeof(hello),
-                     "# HELLO MM1LAB 3 stage=multi_report_capture boot_id=%s connection_id=%lu\n"
+                     "# HELLO MM1LAB 3 stage=multi_report_capture boot_id=%s connection_id=%lu reset_reason=%u\n"
                      "# META capture=single commands=STATUS,CAPTURE,CAPTURE_IMU,CAL_IMU,IMU_RESET,STREAM_IMU stream_imu=1 stream_schema=1 cal_schema=1 cal_line_max=2048 schema=3 n_max=1 timeout_ms=9000 "
                      "imu_reports=rotation_vector,game_rotation_vector,magnetic_field_calibrated "
                      "rv_id=0x05 grv_id=0x08 mag_id=0x03 rv_requested_us=20000 grv_requested_us=20000 mag_requested_us=20000 "
@@ -231,7 +242,7 @@ void service_tcp()
                      "laser_axis=%.9g/%.9g/%.9g azimuth_reference=magnetic azimuth_offset_deg=0 "
                      "distance_source=laser_report laser_trim_mm=0 quaternion_norm_tolerance=0.02 "
                      "singularity_epsilon=1e-5 csv_header=per_capture\n",
-                     boot_id, static_cast<unsigned long>(connection_id),
+                     boot_id, static_cast<unsigned long>(connection_id), static_cast<unsigned>(esp_reset_reason()),
                      (double)IMU_LASER_AXIS_BX, (double)IMU_LASER_AXIS_BY, (double)IMU_LASER_AXIS_BZ);
             queue_reply(hello);
         }
@@ -262,14 +273,14 @@ void service_tcp()
         }
     }
     if (tx_sent == tx_size && control[0]) {
-        char pending[sizeof(control)]; strcpy(pending,control); control[0]=0;
+        auto &pending = workspace; strcpy(pending,control); control[0]=0;
         queue_reply(pending);
     }
     if (tx_snapshot && tx_sent==0 && !control[0]) {
         if (strcmp(lab::stream_state(),"STREAMING")) {
             tx_size=0; tx_snapshot=false; // No byte of this snapshot has left the device.
         } else {
-            char latest[sizeof(tx)];
+            auto &latest = workspace;
             if (lab::stream_output(latest,sizeof(latest),true)) {
                 // Replace only a completely unstarted snapshot, retaining novelty bits.
                 const uint32_t since=tx_since;
@@ -294,7 +305,7 @@ void service_tcp()
         return;
     }
     if (owner == Owner::Tcp && lab::capture_ready()) {
-        char response[sizeof(tx)];
+        auto &response = workspace;
         if (!lab::format_sample(response, sizeof(response), lab::capture_sample())) {
             close_client(); return;
         }
@@ -302,7 +313,7 @@ void service_tcp()
         return;
     }
     if (tx_sent == tx_size && !control[0]) {
-        char output[sizeof(tx)];
+        auto &output = workspace;
         if (lab::stream_output(output,sizeof(output))) {
             queue_reply(output); tx_snapshot=output[0]>='0' && output[0]<='9';
         }
@@ -381,7 +392,7 @@ void network_tick()
 {
     service_serial();
     if (owner == Owner::Serial && lab::capture_ready()) {
-        char response[sizeof(tx)];
+        auto &response = workspace;
         if (lab::format_sample(response, sizeof(response), lab::capture_sample())) Serial.print(response);
         else Serial.println("# ERR FORMAT");
         lab::capture_cancel(); owner = Owner::None;
@@ -434,3 +445,4 @@ void network_tick()
     }
 }
 } // namespace lab
+#pragma GCC diagnostic pop
