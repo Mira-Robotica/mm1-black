@@ -1,3 +1,15 @@
+> Atualização schema 2: o único azimute magnético é `mag_cal_azimuth_deg`,
+> calculado de Calibrated com vertical do GRV. Foram removidas as colunas
+> `mag_raw_azimuth_deg` e `mag_uncal_azimuth_deg`. Os XYZ continuam disponíveis.
+> RV/GRV exibem `rv_status`/`grv_status`: 0 não confiável, 1 baixa, 2 média,
+> 3 alta. RV também exibe `rv_accuracy_rad` (estimativa angular do sensor).
+> GRV não fornece essa estimativa nem certifica norte magnético. Qualidade zero
+> é exibida e gravada; não descarta automaticamente uma leitura válida.
+> A retenção e os bits de atualização também se aplicam individualmente a esses
+> campos. Recompile/grave o firmware e reconstrua a imagem Docker juntos.
+> As descrições abaixo de azimute Raw indisponível são histórico do schema 1;
+> no schema 2 essa coluna não existe. Ensaios físicos antigos não validam o novo schema.
+
 # Monitor contínuo da IMU por TCP
 
 Implementação de `docs/PLANO_MONITOR_STREAMING_IMU.md`, integrada ao clone que estava
@@ -10,7 +22,7 @@ comandos e formatos. A validação inicial em hardware está registrada ao final
 Compile e grave o firmware de laboratório usando o procedimento de
 [LAB_SENSORES_P4.md](LAB_SENSORES_P4.md). A pinagem deste clone é definida em
 `src/board/p4/imu_sparkfun/config.h`; não copie pinagens de outra revisão do plano.
-O monitor requer `stream_imu=1 stream_schema=1` em META e recusa firmware anterior.
+O monitor requer `stream_imu=1 stream_schema=2` em META e recusa firmware anterior.
 Não há atualização automática do firmware.
 
 Na raiz do repositório, com a placa conectada ao Wi-Fi:
@@ -80,7 +92,7 @@ reconstrua a imagem do cliente para usar a correção e seus metadados.
 A [análise das quatro posições](ANALISE_IMU_QUATRO_POSICOES_2026-11-13.md) detalha
 os dados que motivaram a verificação e os limites do mapeamento Raw observado.
 
-O azimute Uncalibrated é uma **extensão geométrica**, não um helper de magnetômetro
+O azimute Calibrated é uma **extensão geométrica**, não um helper de magnetômetro
 já existente na produção. Usa somente a vertical do GRV:
 
 ```text
@@ -115,7 +127,7 @@ STREAM_IMU START rate_hz=2
 # OK STREAM_IMU START session_id=1 state=CONFIGURING
 ... configurações confirmadas pelo sensor ...
 # OK STREAM_IMU READY session_id=1
-# STREAM_META schema=1 ...
+# STREAM_META schema=2 ...
 session_id,seq,...
 ... snapshots CSV ...
 STREAM_IMU PING session_id=1
@@ -193,13 +205,13 @@ session_id,seq,device_ms,updated_mask,valid_mask,value_updated_mask,raw_age_ms,u
 - `updated_mask`: bits **0 Raw, 1 Uncalibrated, 2 Calibrated, 3 RV, 4 GRV**; relatório
   válido novo desde a publicação anterior. As cinco idades são vazias antes da
   primeira amostra, depois tempo desde a recepção local da última amostra válida.
-- `valid_mask`: bits **0–16 na ordem das 17 colunas científicas**; existe valor
+- `valid_mask`: bits **0–18 na ordem das 19 colunas científicas**; existe valor
   válido retido. Não significa que ele seja novo/recente.
 - `value_updated_mask`: mesmos bits, para os valores com atualização válida desde
   a publicação anterior. É subconjunto de `valid_mask`. Bits 9–11 correspondem a
-  azimute/inclinação/roll RV; 12–14 aos GRV; 15 Raw e 16 Uncalibrated magnéticos.
+  azimute/inclinação/roll RV; 12–14 aos GRV; 15 azimute Calibrated; 16 qualidade RV; 17 qualidade GRV; 18 precisão RV em radianos.
   Bit 15 permanece zero nesta implementação.
-- As 17 grandezas contêm o último valor válido, ou vazio antes da primeira leitura.
+- As 19 grandezas contêm o último valor válido, ou vazio antes da primeira leitura.
   Quaternion inválido não substitui seu cache. Singularidade invalida apenas a
   atualização daquele ângulo. Baixa qualidade não invalida Raw/Uncalibrated.
 
@@ -230,7 +242,7 @@ Com `--save true`, cria diretório exclusivo `UTC_uuid` com:
    unidades, método, tolerâncias, políticas e limites. Não é reescrito no término e
    não contém um estado final fictício. Não são coletadas credenciais/variáveis de
    ambiente além das opções de conexão declaradas.
-2. `samples.csv`, cabeçalho `elapsed_s` seguido das 17 colunas científicas.
+2. `samples.csv`, cabeçalho `elapsed_s` seguido das 19 colunas científicas.
    Uma linha por snapshot aceito. **Somente atualizações válidas daquele snapshot
    são preenchidas**; os outros campos ficam vazios, mesmo que a tela mostre um
    valor retido. Não se fabricam medições repetindo dados congelados.
@@ -306,7 +318,7 @@ aceite físico concluído:
 - Trena fixa: aproximar/retirar ímã, observando Raw/Uncal acima do ruído. Não exigir
   que Calibrated elimine a perturbação nem presumir a reação do RV.
 - Orientações niveladas e inclinadas conhecidas: verificar +X, quadrantes, sinal de
-  inclinação e azimute Uncal. **Resolver e documentar eixos/escalas Raw antes de
+  inclinação e azimute Calibrated. **Resolver e documentar eixos/escalas Raw antes de
   habilitar seu azimute**; não alegar validação dele enquanto isso estiver pendente.
 - Comparar configurações antes/depois de STOP, SIGKILL, perda de Wi-Fi e reset
   espontâneo. Confirmar retorno de CAPTURE_IMU, captura completa e calibração,
