@@ -15,12 +15,19 @@ import time
 
 
 MAX_LINE_BYTES = 2048
-CAPTURE_HEADER = (
+CAPTURE_HEADER_V3 = (
     "request_id,sample_index,distance_m,laser_valid,laser_error,qw,qx,qy,qz,"
     "azimuth_deg,inclination_deg,roll_deg,angles_valid,angle_error,accuracy_rad,"
     "imu_status,imu_seq,imu_valid,imu_error,"
     "grv_qw,grv_qx,grv_qy,grv_qz,grv_status,grv_seq,grv_valid,grv_error,"
     "mag_x_ut,mag_y_ut,mag_z_ut,mag_status,mag_seq,mag_valid,mag_error,imu_epoch"
+)
+
+CAPTURE_HEADER = (
+    CAPTURE_HEADER_V3 + ",mag_raw_x_adc,mag_raw_y_adc,mag_raw_z_adc,raw_valid,raw_error,"
+    "mag_uncal_x_uT,mag_uncal_y_uT,mag_uncal_z_uT,uncal_valid,uncal_error,"
+    "grv_azimuth_deg,grv_inclination_deg,grv_roll_deg,mag_cal_azimuth_deg,"
+    "raw_age_ms,uncal_age_ms,cal_age_ms,rv_age_ms,grv_age_ms"
 )
 
 
@@ -109,12 +116,12 @@ def parse_hello(line):
 
 
 def parse_sample(header, row, capture_id, use_laser=True):
-    if header != CAPTURE_HEADER:
-        raise ProtocolError("Cabeçalho CSV de captura inesperado (requer schema 3)")
+    if header not in (CAPTURE_HEADER_V3, CAPTURE_HEADER):
+        raise ProtocolError("Cabeçalho CSV de captura inesperado")
     cells = next(csv.reader([row]))
-    if len(cells) != len(CAPTURE_HEADER.split(",")):
+    if len(cells) != len(header.split(",")):
         raise ProtocolError("Quantidade de colunas incorreta")
-    sample = dict(zip(CAPTURE_HEADER.split(","), cells))
+    sample = dict(zip(header.split(","), cells))
     expect(sample, "request_id", str(capture_id))
     expect(sample, "sample_index", "1")
     if not use_laser:
@@ -123,7 +130,8 @@ def parse_sample(header, row, capture_id, use_laser=True):
     elif sample["laser_error"] == "LASER_DISABLED":
         raise ProtocolError("CSV: laser desabilitado em uma captura que solicita distância")
     integer(sample, "imu_epoch", 0, 0xFFFFFFFF)
-    for group in ("laser", "imu", "grv", "mag", "angles"):
+    extra = ("raw", "uncal") if header == CAPTURE_HEADER else ()
+    for group in ("laser", "imu", "grv", "mag", "angles") + extra:
         flag, error = group + "_valid", "angle_error" if group == "angles" else group + "_error"
         if sample[flag] not in {"0", "1"}:
             raise ProtocolError(f"CSV: flag inválida em {flag}")
@@ -155,6 +163,27 @@ def parse_sample(header, row, capture_id, use_laser=True):
         elif sample[group + "_status"]:
             raise ProtocolError(f"CSV: qualidade de {group} sem relatório")
         numbers(components, valid, received)
+    if extra:
+        for group, suffix in (("raw", "adc"), ("uncal", "uT")):
+            valid = sample[group + "_valid"] == "1"
+            keys = [f"mag_{group}_{axis}_{suffix}" for axis in "xyz"]
+            numbers(keys, valid, valid)
+            if group == "raw" and valid:
+                for key in keys:
+                    integer(sample, key, -32768, 32767)
+        for group, received in (("raw", sample["raw_valid"] == "1"),
+                                ("uncal", sample["uncal_valid"] == "1"),
+                                ("cal", bool(sample["mag_seq"])), ("rv", bool(sample["imu_seq"])),
+                                ("grv", bool(sample["grv_seq"]))):
+            key = group + "_age_ms"
+            if received:
+                integer(sample, key, 0, 0xFFFFFFFF)
+            else:
+                expect(sample, key, "")
+        grv_valid = sample["grv_valid"] == "1"
+        numbers(("grv_inclination_deg",), grv_valid, grv_valid)
+        numbers(("grv_azimuth_deg", "grv_roll_deg"), False, grv_valid)
+        numbers(("mag_cal_azimuth_deg",), False, grv_valid and sample["mag_valid"] == "1")
     lv, iv, av = (sample[key + "_valid"] == "1" for key in ("laser", "imu", "angles"))
     numbers(("distance_m",), lv, lv)
     numbers(("azimuth_deg", "inclination_deg", "roll_deg"), av, iv)
@@ -180,8 +209,13 @@ def parse_done(line, sample, capture_id, use_laser=True):
     for key, value in (("request_id", str(capture_id)), ("completion", "COMPLETE"),
                        ("n_requested", "1"), ("n_rows", "1"), ("code", "NONE"), ("state", "IDLE")):
         expect(done, key, value)
-    flags = [int(sample[group + "_valid"]) for group in ("laser", "imu", "grv", "mag")]
-    for group, flag in zip(("laser", "imu", "grv", "mag"), flags):
+    groups = ("laser", "imu", "grv", "mag")
+    if "raw_valid" in sample:
+        groups += ("raw", "uncal")
+    flags = [int(sample[group + "_valid"]) for group in groups]
+    for group, flag in zip(groups, flags):
+        if f"n_{group}_valid" not in done:
+            raise ProtocolError(f"DONE: falta n_{group}_valid")
         expect(done, f"n_{group}_valid", str(flag))
     if not use_laser or "laser_requested" in done:
         if done.get("laser_requested") != str(int(use_laser)):
@@ -192,7 +226,7 @@ def parse_done(line, sample, capture_id, use_laser=True):
     expect(done, "result", "OK" if all(flags) else "PARTIAL" if any(flags) else "ERROR")
     if done["imu_reset"] not in {"0", "1"}:
         raise ProtocolError("DONE: flag imu_reset inválida")
-    reset_errors = any(sample[g + "_error"] == "IMU_RESET" for g in ("imu", "grv", "mag"))
+    reset_errors = any(sample[g + "_error"] == "IMU_RESET" for g in groups[1:])
     if reset_errors != (done["imu_reset"] == "1"):
         raise ProtocolError("DONE: reset incompatível com os relatórios")
     return done
@@ -230,8 +264,8 @@ def query_status(host, port=5000, timeout=5.0, capture_id=None, record=None, use
         expect(meta, "capture", "single" if sensors else "unavailable")
         if "STATUS" not in meta["commands"].split(","):
             raise ProtocolError("META: comando STATUS não anunciado")
-        if stage == "multi_report_capture" and meta.get("schema") != "3":
-            raise ProtocolError("META: protocolo 3 requer schema=3")
+        if stage == "multi_report_capture" and meta.get("schema") not in {"3", "4"}:
+            raise ProtocolError("META: protocolo 3 requer schema=3 ou 4")
 
         sock.settimeout(timeout)
         try:
@@ -260,10 +294,10 @@ def query_status(host, port=5000, timeout=5.0, capture_id=None, record=None, use
             integer(status, key, 0, 0xFFFFFFFF)
         if capture_id is not None:
             if stage != "multi_report_capture":
-                raise ProtocolError("Captura requer firmware MM1LAB 3 com schema=3")
+                raise ProtocolError("Captura requer firmware MM1LAB 3 com schema=3 ou 4")
             if command not in meta["commands"].split(","):
                 raise ProtocolError(f"Firmware não anuncia {command}; atualize o firmware da Trena")
-            for key, value in (("schema", "3"), ("n_max", "1"), ("csv_header", "per_capture")):
+            for key, value in (("n_max", "1"), ("csv_header", "per_capture")):
                 if meta.get(key) != value:
                     raise ProtocolError(f"META: captura unitária requer {key}={value}")
             sock.settimeout(timeout)
@@ -274,6 +308,9 @@ def query_status(host, port=5000, timeout=5.0, capture_id=None, record=None, use
             integer(ack, "timeout_ms", 1, 9000)
             reader.timeout = int(ack["timeout_ms"])/1000 + timeout
             header = read("CSV header")
+            expected_header = CAPTURE_HEADER if meta["schema"] == "4" else CAPTURE_HEADER_V3
+            if header != expected_header:
+                raise ProtocolError("Cabeçalho CSV incompatível com schema anunciado")
             sample = parse_sample(header, read("CSV row"), capture_id, use_laser)
             result["capture"] = {"sample": sample, "complete": False,
                                  "orientation_session": {"boot_id": hello["boot_id"],

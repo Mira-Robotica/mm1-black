@@ -26,16 +26,19 @@ struct P4ImuSample {
     float w, x, y, z, accuracy_rad;
     uint8_t status, sequence;
     uint32_t generation;
+    uint32_t received_ms = 0;
 };
 struct P4ImuGameSample {
     float w, x, y, z;
     uint8_t status, sequence;
     uint32_t generation;
+    uint32_t received_ms = 0;
 };
 struct P4ImuMagSample {
     float x, y, z; // microteslas, in the configured sensor output axes.
     uint8_t status, sequence;
     uint32_t generation;
+    uint32_t received_ms = 0;
 };
 struct P4ImuDiagnostics {
     uint32_t generation, empty_reads, resets, io_errors, decode_errors, sequence_gaps;

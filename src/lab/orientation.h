@@ -1,5 +1,6 @@
 #pragma once
 #include <limits>
+#include <cstdint>
 
 namespace lab {
 struct Orientation {
@@ -16,5 +17,7 @@ Orientation orientation(float w, float x, float y, float z, float bx, float by, 
 
 namespace lab {
 // GRV supplies only body-frame up. min_horizontal is in the vector's units.
+float calibrated_azimuth(const float q[4], uint32_t grv_ms, const float m[3], uint32_t cal_ms,
+                         uint32_t now);
 float magnetic_azimuth(const float q[4], const float m[3], float min_horizontal);
 }

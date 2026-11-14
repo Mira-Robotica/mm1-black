@@ -65,11 +65,11 @@ class TcpTrena:
         self.next_connection_at = time.monotonic() + 0.2
         meta = record["meta"]
         if (record["hello"]["stage"] != "multi_report_capture" or
-                meta.get("schema") != "3" or meta.get("n_max") != "1" or
+                meta.get("schema") not in {"3", "4"} or meta.get("n_max") != "1" or
                 meta.get("csv_header") != "per_capture" or
                 self.command not in meta["commands"].split(",")):
             raise status.ProtocolError(
-                f"Experimento requer schema 3 e {self.command} unitário; atualize o firmware da Trena")
+                f"Experimento requer schema 3 ou 4 e {self.command} unitário; atualize o firmware da Trena")
 
     def capture(self, capture_id, record):
         # Give the single-client ESP server time to observe the previous FIN.
@@ -88,17 +88,18 @@ class SimulatedTrena:
 
     def preflight(self, record):
         record.update(source="simulated", hello={"boot_id": "0000000000000000"},
-                      meta={"schema": "3", "laser_axis": "1/0/0"})
+                      meta={"schema": "4", "laser_axis": "1/0/0"})
 
     def capture(self, capture_id, record):
         self.preflight(record)
         record.update(capture_command=self.command, use_laser=self.use_laser)
         laser = "1.234,1,NONE" if self.use_laser else ",0,LASER_DISABLED"
         row = (f"{capture_id},1,{laser},1,0,0,0,90,0,0,1,NONE,0.025,3,1,1,NONE,"
-               "1,0,0,0,3,1,1,NONE,12,-3,40,3,1,1,NONE,0")
+               "1,0,0,0,3,1,1,NONE,12,-3,40,3,1,1,NONE,0,"
+               "-32768,200,-30,1,NONE,15,-2,42,1,NONE,90,0,0,345.963757,0,0,0,0,0")
         done_line = (f"# DONE request_id={capture_id} completion=COMPLETE result=OK n_requested=1 "
                      f"n_rows=1 n_valid=1 n_laser_valid={int(self.use_laser)} n_imu_valid=1 n_grv_valid=1 n_mag_valid=1 "
-                     f"imu_reset=0 code=NONE state=IDLE laser_requested={int(self.use_laser)}")
+                     f"n_raw_valid=1 n_uncal_valid=1 imu_reset=0 code=NONE state=IDLE laser_requested={int(self.use_laser)}")
         sample = status.parse_sample(status.CAPTURE_HEADER, row, capture_id, self.use_laser)
         record["capture"] = dict(sample=sample, done=status.parse_done(done_line, sample, capture_id, self.use_laser),
                                  complete=True, imu_reset=False,
@@ -145,6 +146,8 @@ def run_experiment(robot, trena, journal, metadata, first_capture_id=1, captures
             fields = protocol.pose_fields(experiment_number, index, target) if experiment_number else {}
             accepted_count = 0
             sensor_valid_counts = dict(laser=0, imu=0, grv=0, mag=0)
+            if preflight["meta"].get("schema") == "4":
+                sensor_valid_counts.update(raw=0, uncal=0)
             for attempt in range(captures_per_pose):
                 capture_id = first_capture_id + index * captures_per_pose + attempt
                 row = dict(pose_id=pose_id, pose_index=index, capture_id=capture_id,

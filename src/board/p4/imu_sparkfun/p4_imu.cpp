@@ -90,7 +90,7 @@ void sensor(void *, sh2_SensorEvent_t *event)
         sample = {v.un.rotationVector.real, v.un.rotationVector.i,
                   v.un.rotationVector.j, v.un.rotationVector.k,
                   v.un.rotationVector.accuracy, uint8_t(v.status & 3),
-                  v.sequence, ++diag.generation};
+                  v.sequence, ++diag.generation, millis()};
         sample_valid = true;
         if (std::isfinite(sample.accuracy_rad) && sample.accuracy_rad >= 0)
             feedback(info.rv, v, sample.accuracy_rad);
@@ -98,13 +98,13 @@ void sensor(void *, sh2_SensorEvent_t *event)
         if (game_valid && v.sequence == game_sample.sequence) return;
         game_sample = {v.un.gameRotationVector.real, v.un.gameRotationVector.i,
                        v.un.gameRotationVector.j, v.un.gameRotationVector.k,
-                       uint8_t(v.status & 3), v.sequence, ++diag.game_generation};
+                       uint8_t(v.status & 3), v.sequence, ++diag.game_generation, millis()};
         game_valid = true;
         feedback(info.game, v);
     } else if (v.sensorId == SH2_MAGNETIC_FIELD_CALIBRATED) {
         if (mag_valid && v.sequence == mag_sample.sequence) return;
         mag_sample = {v.un.magneticField.x, v.un.magneticField.y, v.un.magneticField.z,
-                      uint8_t(v.status & 3), v.sequence, ++diag.mag_generation};
+                      uint8_t(v.status & 3), v.sequence, ++diag.mag_generation, millis()};
         mag_valid = true;
         if (std::isfinite(mag_sample.x) && std::isfinite(mag_sample.y) && std::isfinite(mag_sample.z))
             feedback(info.mag, v);
@@ -316,8 +316,10 @@ void p4_imu_poll()
 }
 bool p4_imu_enable_reports()
 {
-    for (const auto id : {SH2_ROTATION_VECTOR, SH2_GAME_ROTATION_VECTOR, SH2_MAGNETIC_FIELD_CALIBRATED}) {
-        const int rc = p4_imu_lab_report(id, 20000);
+    sh2_SensorConfig_t config{};
+    config.reportInterval_us = 20000;
+    for (unsigned group = 0; group < 5; ++group) {
+        const int rc = p4_imu_set_feature(group, config);
         if (rc != SH2_OK) { p4_sparkfun_stage("REPORTS", rc); return false; }
     }
     return true;

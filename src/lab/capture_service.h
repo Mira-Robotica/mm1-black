@@ -20,6 +20,11 @@ struct Sample {
     bool grv_received = false, mag_received = false;
     bool grv_valid = false, mag_valid = false;
     const char *grv_error = "IMU_NOT_READY", *mag_error = "IMU_NOT_READY";
+    P4ImuStreamSample raw{}, uncal{};
+    const char *raw_error = "IMU_NOT_READY", *uncal_error = "IMU_NOT_READY";
+    Orientation grv_angles;
+    float mag_cal_azimuth = std::numeric_limits<float>::quiet_NaN();
+    uint32_t finished_ms = 0;
     uint32_t imu_epoch = 0;
     bool imu_reset = false;
     uint32_t imu_io_errors = 0;

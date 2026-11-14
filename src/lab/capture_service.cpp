@@ -11,12 +11,16 @@ enum class Phase { Idle, Laser, DrainImu, WaitImu, Ready };
 Phase phase = Phase::Idle;
 Sample sample;
 uint32_t started = 0, imu_started = 0, baseline = 0, game_baseline = 0, mag_baseline = 0;
+uint32_t raw_baseline = 0, uncal_baseline = 0;
 P4ImuDiagnostics barrier{};
 void imu_finish(const char *error)
 {
     if (!sample.imu_received) sample.imu_error = error;
     if (!sample.grv_received) sample.grv_error = error;
     if (!sample.mag_received) sample.mag_error = error;
+    if (!sample.raw.valid) sample.raw_error = error;
+    if (!sample.uncal.valid) sample.uncal_error = error;
+    sample.finished_ms = millis();
     phase = Phase::Ready;
 }
 }
@@ -24,7 +28,7 @@ void capture_begin()
 {
     laser_begin();
     const bool ready = p4_imu_begin(MM1_IMU_ADDR);
-    Serial.printf("[LAB] IMU=%s RV/GRV/MAG=50Hz_nominal acceleration=OFF magnetic_offset=0 laser_trim=0\n",
+    Serial.printf("[LAB] IMU=%s RV/GRV/CAL/RAW/UNCAL=50Hz_nominal acceleration=OFF magnetic_offset=0 laser_trim=0\n",
                   ready ? "READY" : "NOT_READY");
     const auto init = p4_imu_diagnostics();
     Serial.printf("[LAB] IMU init=%s rc=%d addr=0x%02X SDA=%u SCL=%u\n",
@@ -91,10 +95,11 @@ void capture_tick()
     if (now-imu_started >= LAB_IMU_TIMEOUT_MS) {
         if (phase == Phase::DrainImu) imu_finish("IMU_BACKLOG");
         else {
-            if (!sample.imu_received) sample.imu_error = "IMU_TIMEOUT";
+            imu_finish("IMU_TIMEOUT");
             if (!sample.grv_received) sample.grv_error = "GRV_TIMEOUT";
             if (!sample.mag_received) sample.mag_error = "MAG_TIMEOUT";
-            phase = Phase::Ready;
+            if (!sample.raw.valid) sample.raw_error = "RAW_TIMEOUT";
+            if (!sample.uncal.valid) sample.uncal_error = "UNCAL_TIMEOUT";
         }
         return;
     }
@@ -117,6 +122,8 @@ void capture_tick()
         if (diag.decode_errors != barrier.decode_errors) { imu_finish("IMU_DECODE_ERROR"); return; }
         // A successful empty HAL read proves the pending FIFO was drained.
         if (diag.empty_reads != barrier.empty_reads) {
+            raw_baseline = p4_imu_stream_sample(0).generation;
+            uncal_baseline = p4_imu_stream_sample(1).generation;
             baseline = diag.generation;
             game_baseline = diag.game_generation;
             mag_baseline = diag.mag_generation;
@@ -139,7 +146,8 @@ void capture_tick()
     if (!sample.grv_received && p4_imu_game_snapshot(&game) && game.generation != game_baseline) {
         sample.grv = game;
         sample.grv_received = true;
-        sample.grv_valid = orientation(game.w, game.x, game.y, game.z, 1, 0, 0).quaternion_valid;
+        sample.grv_angles = orientation(game.w, game.x, game.y, game.z, 1, 0, 0);
+        sample.grv_valid = sample.grv_angles.quaternion_valid;
         sample.grv_error = sample.grv_valid ? "NONE" : "GRV_BAD_QUAT";
     }
     P4ImuMagSample mag{};
@@ -149,7 +157,23 @@ void capture_tick()
         sample.mag_valid = std::isfinite(mag.x) && std::isfinite(mag.y) && std::isfinite(mag.z);
         sample.mag_error = sample.mag_valid ? "NONE" : "MAG_NONFINITE";
     }
-    if (sample.imu_received && sample.grv_received && sample.mag_received) phase = Phase::Ready;
+    auto collect = [&](unsigned group, uint32_t previous, P4ImuStreamSample &out, const char *&error) {
+        if (out.valid) return;
+        const auto report = p4_imu_stream_sample(group);
+        if (report.valid && report.epoch == sample.imu_epoch && report.generation != previous) {
+            out = report;
+            error = "NONE";
+        }
+    };
+    collect(0, raw_baseline, sample.raw, sample.raw_error);
+    collect(1, uncal_baseline, sample.uncal, sample.uncal_error);
+    if (sample.grv_valid && sample.mag_valid && !std::isfinite(sample.mag_cal_azimuth)) {
+        const float q[] = {sample.grv.w, sample.grv.x, sample.grv.y, sample.grv.z};
+        const float m[] = {sample.mag.x, sample.mag.y, sample.mag.z};
+        sample.mag_cal_azimuth = calibrated_azimuth(q, sample.grv.received_ms, m, sample.mag.received_ms, now);
+    }
+    if (sample.imu_received && sample.grv_received && sample.mag_received &&
+        sample.raw.valid && sample.uncal.valid) imu_finish("NONE");
     // A mixed cargo can deliver valid reports before another report fails decoding.
     // Preserve those fresh reports and attribute the transport error only to missing ones.
     else if (diag.decode_errors != barrier.decode_errors) imu_finish("IMU_DECODE_ERROR");

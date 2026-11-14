@@ -136,10 +136,8 @@ void samples()
         // Raw axes/scales are unverified: never fabricate a Raw heading.
         if (g==2) {
             const auto &q=incoming[4];
-            const int32_t separation=int32_t(s.received_ms-q.received_ms);
-            if (q.valid && q.epoch==epoch && separation>=-200 && separation<=200 &&
-                uint32_t(millis()-q.received_ms)<=200 && uint32_t(millis()-s.received_ms)<=200)
-                set_value(15,magnetic_azimuth(q.v,s.v,0.01f));
+            if (q.valid && q.epoch==epoch)
+                set_value(15,calibrated_azimuth(q.v,q.received_ms,s.v,s.received_ms,millis()));
         }
     }
 }

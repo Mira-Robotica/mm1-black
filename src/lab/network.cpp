@@ -232,9 +232,9 @@ void service_tcp()
             auto &hello = workspace;
             snprintf(hello, sizeof(hello),
                      "# HELLO MM1LAB 3 stage=multi_report_capture boot_id=%s connection_id=%lu reset_reason=%u\n"
-                     "# META capture=single commands=STATUS,CAPTURE,CAPTURE_IMU,CAL_IMU,IMU_RESET,STREAM_IMU stream_imu=1 stream_schema=2 cal_schema=1 cal_line_max=2048 schema=3 n_max=1 timeout_ms=9000 "
-                     "imu_reports=rotation_vector,game_rotation_vector,magnetic_field_calibrated "
-                     "rv_id=0x05 grv_id=0x08 mag_id=0x03 rv_requested_us=20000 grv_requested_us=20000 mag_requested_us=20000 "
+                     "# META capture=single commands=STATUS,CAPTURE,CAPTURE_IMU,CAL_IMU,IMU_RESET,STREAM_IMU stream_imu=1 stream_schema=2 cal_schema=1 cal_line_max=2048 schema=4 n_max=1 timeout_ms=9000 "
+                     "imu_reports=rotation_vector,game_rotation_vector,magnetic_field_calibrated,raw_magnetometer,magnetic_field_uncalibrated "
+                     "rv_id=0x05 grv_id=0x08 mag_id=0x03 rv_requested_us=20000 grv_requested_us=20000 mag_requested_us=20000 raw_requested_us=20000 uncal_requested_us=20000 "
                      "intervals=nominal_acquisition confirmed_intervals=STATUS unknown_interval=-1 "
                      "quaternion_order=wxyz grv_heading_reference=arbitrary mag_units=uT mag_frame=sensor_output "
                      "orientation_convention=body_to_world rv_world=ENU imu_epoch_scope=boot_id "

@@ -31,6 +31,14 @@ Orientation orientation(float w, float x, float y, float z, float bx, float by, 
 }
 
 namespace lab {
+float calibrated_azimuth(const float q[4], uint32_t grv_ms, const float m[3], uint32_t cal_ms,
+                         uint32_t now)
+{
+    // Both reports are in the last 200 ms, so their separation is also bounded.
+    if (now - grv_ms > 200 || now - cal_ms > 200) return std::numeric_limits<float>::quiet_NaN();
+    return magnetic_azimuth(q, m, 0.01f);
+}
+
 float magnetic_azimuth(const float q[4], const float m[3], float min_horizontal)
 {
     const float invalid = std::numeric_limits<float>::quiet_NaN();
