@@ -15,6 +15,17 @@ P4ImuSample snapshot{};
 P4ImuGameSample game{};
 P4ImuMagSample mag{};
 bool p4_imu_begin(uint8_t) { diag.ready = true; return true; }
+bool publish_fields = true;
+P4ImuStreamSample p4_imu_stream_sample(unsigned group)
+{
+    P4ImuStreamSample report{};
+    report.valid = publish_fields;
+    report.generation = fake_ms;
+    report.received_ms = fake_ms;
+    report.epoch = diag.epoch;
+    report.v[0] = group == 0 ? -32768 : 1.625f;
+    return report;
+}
 void p4_imu_poll() {}
 P4ImuDiagnostics p4_imu_diagnostics() { return diag; }
 bool p4_imu_snapshot(P4ImuSample *s) { *s = snapshot; return diag.ready; }
@@ -34,7 +45,7 @@ void tick(unsigned ms=5) { fake_ms+=ms; lab::capture_tick(); }
 void reset()
 {
     lab::capture_cancel(); fake_rx.clear(); fake_tx.clear(); fake_ms=0;
-    diag={}; snapshot={1,0,0,0,0.025f,0,254,0}; game={1,0,0,0,0,17,0}; mag={12,-3,40,0,99,0}; lab::capture_begin();
+    publish_fields=true; diag={}; snapshot={1,0,0,0,0.025f,0,254,0}; game={1,0,0,0,0,17,0}; mag={12,-3,40,0,99,0}; lab::capture_begin();
 }
 void measure()
 {
@@ -104,9 +115,11 @@ int main()
         const auto end=std::min(csv.find(',',pos),row_end);
         columns.push_back(csv.substr(pos,end-pos));pos=end+1;
     }
-    assert(columns.size()==35 && columns[19]=="1" && columns[24]=="17");
+    assert(columns.size()==54 && columns[19]=="1" && columns[24]=="17");
     assert(columns[27]=="12" && columns[28]=="-3" && columns[29]=="40");
     assert(columns[31]=="99" && columns[32]=="1" && columns[34]=="0");
+    assert(columns[35]=="-32768" && columns[40]=="1.625" && columns[45]=="90");
+    assert(std::abs(std::stof(columns[48])-345.96376f)<0.0001f);
     assert(!lab::format_sample(out,10,s));
     assert(!lab::capture_start(2));
     // Laser missing/timeout still evaluates IMU; late replies cannot contaminate the next request.
@@ -165,6 +178,12 @@ int main()
     mag.generation=++diag.mag_generation;tick();assert(!lab::capture_ready());
     game.generation=++diag.game_generation;tick();assert(!lab::capture_ready());
     snapshot.generation=++diag.generation;tick();assert(lab::capture_ready());
+    // The same two reports can be valid individually but too far apart for heading.
+    reset(); assert(lab::capture_start(1,false)); ++diag.empty_reads; tick();
+    mag.generation=++diag.mag_generation; mag.received_ms=fake_ms; tick();
+    tick(201); game.generation=++diag.game_generation; game.received_ms=fake_ms;
+    snapshot.generation=++diag.generation; tick(); s=lab::capture_sample();
+    assert(lab::capture_ready() && s.mag_valid && s.grv_valid && std::isnan(s.mag_cal_azimuth));
     // Every missing type times out independently; other samples remain intact.
     for (int missing=0;missing<3;++missing) {
         reset();measure();++diag.empty_reads;tick();
@@ -248,6 +267,10 @@ int main()
     assert(!lab::capture_busy() && !strcmp(lab::laser_state(),"READY"));
     assert(lab::capture_start(2));tick(50);tick(120);rx(frame());tick();fresh();
     assert(lab::capture_ready() && lab::capture_sample().laser.valid);
+    reset(); publish_fields=false; assert(lab::capture_start(2,false)); fresh(); tick(1000);
+    s=lab::capture_sample();
+    assert(s.mag_valid && !s.raw.valid && !strcmp(s.uncal_error,"UNCAL_TIMEOUT"));
+    assert(lab::format_sample(out,sizeof(out),s) && strstr(out,"result=PARTIAL"));
     uint32_t id=0,count=0;
     assert(lab::parse_capture("CAPTURE 123",id,count) && id==123 && count==1);
     assert(lab::parse_capture("CAPTURE 4294967295 1",id,count));

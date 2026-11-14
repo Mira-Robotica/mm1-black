@@ -180,7 +180,7 @@ class CoordinatorTests(unittest.TestCase):
         self.robot.poses = self.robot.poses[:1]
         with peer(lambda c: exchange(c, response(sample, False), use_laser=False)) as port:
             self.trena = exp.TcpTrena("127.0.0.1", port, 1, use_laser=False)
-            self.trena.preflight = lambda r: r.update(hello={"boot_id": "0123456789abcdef"})
+            self.trena.preflight = lambda r: r.update(hello={"boot_id": "0123456789abcdef"}, meta={"schema": "3"})
             self.assertEqual(self.run_exp(7), 0)
         self.assertTrue(self.poses()[0]["accepted"])
         self.assertFalse(self.poses()[0]["use_laser"])
@@ -188,6 +188,22 @@ class CoordinatorTests(unittest.TestCase):
         summary = next(r for r in self.journal.records if r["record_type"] == "pose_summary")
         self.assertFalse(summary["product_improvement_required"])
         self.assertEqual(summary["sensor_valid_counts"], dict(laser=0, imu=1, grv=1, mag=1))
+
+    def test_numbered_experiments_record_extended_imu_capture(self):
+        for number in (2, 3):
+            with self.subTest(number=number):
+                self.robot.poses = [exp.protocol.build_targets()[0]]
+                trena = exp.SimulatedTrena(use_laser=False)
+                self.assertEqual(exp.run_experiment(self.robot, trena, self.journal, {},
+                                                    experiment_number=number), 0)
+                row = self.poses()[-1]
+                self.assertEqual(row["experiment_number"], number)
+                sample = row["trena"]["capture"]["sample"]
+                self.assertEqual(sample["mag_raw_x_adc"], "-32768")
+                self.assertEqual(sample["mag_uncal_y_uT"], "-2")
+                self.assertEqual(sample["grv_azimuth_deg"], "90")
+                self.assertAlmostEqual(float(sample["mag_cal_azimuth_deg"]), 345.963757)
+                self.assertEqual(sample["laser_error"], "LASER_DISABLED")
 
     def test_imu_only_sensor_failures_still_report_and_continue(self):
         self.trena = exp.SimulatedTrena(use_laser=False)
@@ -210,7 +226,7 @@ class CoordinatorTests(unittest.TestCase):
         # Test captures through real TCP; preflight separately covered above.
         with peer(server) as port:
             self.trena = exp.TcpTrena("127.0.0.1", port, .2)
-            self.trena.preflight = lambda r: r.update(hello={"boot_id": "0123456789abcdef"})
+            self.trena.preflight = lambda r: r.update(hello={"boot_id": "0123456789abcdef"}, meta={"schema": "3"})
             return self.run_exp(7)
 
     def test_done_is_required_before_next_pose(self):
@@ -226,7 +242,7 @@ class CoordinatorTests(unittest.TestCase):
         self.robot.poses = self.robot.poses[:1]
         with peer(server) as port:
             self.trena = exp.TcpTrena("127.0.0.1", port, 1)
-            self.trena.preflight = lambda r: r.update(hello={"boot_id": "0123456789abcdef"})
+            self.trena.preflight = lambda r: r.update(hello={"boot_id": "0123456789abcdef"}, meta={"schema": "3"})
             results = []
             thread = threading.Thread(target=lambda: results.append(self.run_exp(7)))
             thread.start()

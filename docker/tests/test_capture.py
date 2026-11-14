@@ -39,9 +39,9 @@ def response(sample=None, use_laser=True):
     return (HEADER + "\n" + row + "\n" + done).encode()
 
 
-def handshake(conn, use_laser=True):
+def handshake(conn, use_laser=True, schema=3):
     meta = META if use_laser else META.replace(b"commands=STATUS,CAPTURE", b"commands=STATUS,CAPTURE,CAPTURE_IMU")
-    conn.sendall(UNIT_HELLO + meta)
+    conn.sendall(UNIT_HELLO + meta.replace(b"schema=3", f"schema={schema}".encode()))
     read_command(conn)  # Asserts exactly STATUS\n.
     conn.sendall(UNIT_STATUS)
     command = bytearray()
@@ -66,6 +66,25 @@ def exchange(conn, body=None, ack=ACK, fragmented=False, use_laser=True):
 
 
 class CaptureTests(unittest.TestCase):
+    def test_schema4_capture_and_imu_only(self):
+        for laser in (True, False):
+            sample = GOOD if laser else dict(GOOD, distance_m="", laser_valid="0", laser_error="LASER_DISABLED")
+            _, row, done = response(sample, laser).decode().splitlines()
+            row += ",-32768,0,32767,1,NONE,-0.0625,2,0,1,NONE,90,0,0,345.96376,1,3,4,0,0"
+            done += " n_raw_valid=1 n_uncal_valid=1"
+            def server(conn):
+                handshake(conn, laser, schema=4)
+                ack = ACK if laser else ACK.replace(b"OK CAPTURE ", b"OK CAPTURE_IMU ")
+                conn.sendall(ack + f"{status.CAPTURE_HEADER}\n{row}\n{done}\n".encode())
+            with self.subTest(laser=laser), peer(server) as port:
+                result = status.query_status("127.0.0.1", port, 1, 7, use_laser=laser)
+            captured = result["capture"]["sample"]
+            self.assertEqual(captured["mag_raw_z_adc"], "32767")
+            self.assertEqual(captured["mag_cal_azimuth_deg"], "345.96376")
+            for invalid in (row.replace("-32768", "-32769"), row.replace("-0.0625", "nan")):
+                with self.assertRaises(status.ProtocolError):
+                    status.parse_sample(status.CAPTURE_HEADER, invalid, 7, laser)
+
     def test_imu_only_success_and_failures(self):
         sample = dict(GOOD, distance_m="", laser_valid="0", laser_error="LASER_DISABLED")
         cases = [sample, dict(sample, grv_valid="0", grv_error="GRV_BAD_QUAT", grv_qw="2")]

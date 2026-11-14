@@ -3,6 +3,7 @@
 #include "board/p4/p4_imu.h"
 #include "board/p4/SparkFun_BNO08x_Arduino_Library-1.0.6/src/SparkFun_BNO08x_Arduino_Library.cpp"
 #include <cassert>
+#include <algorithm>
 #include <cstdio>
 
 static uint8_t channel_seq[6]{};
@@ -67,7 +68,7 @@ int main()
     fake_wire_on_write=write_command;
     assert(p4_imu_begin(0x4b));
     assert(Wire1.port==1 && Wire1.sda==25 && Wire1.scl==34 && Wire1.hz==100000);
-    assert(Wire.sda==-1 && Wire1.timeout==50 && Wire1.buffer_size==32);
+    assert(Wire.sda==-1 && Wire1.timeout==50 && Wire1.buffer_size==128);
     assert(Wire1.ends==1 && Wire1.begins==1 && Wire.ends==0 && Wire.begins==0);
     assert(fake_pin_writes.size()==2 && fake_pin_writes[0].pin==49 && fake_pin_writes[0].level==LOW);
     assert(fake_pin_writes[1].ms-fake_pin_writes[0].ms==10);
@@ -78,6 +79,16 @@ int main()
     assert(p4_imu_diagnostics().rst_low==0 && p4_imu_diagnostics().rst_high==1);
     assert(p4_imu_lab_info().part==0x12345678 && p4_imu_lab_info().rv_interval_us==20000);
     assert(p4_imu_lab_info().game_interval_us==20000 && p4_imu_lab_info().mag_interval_us==20000);
+    for (unsigned g=0;g<5;++g) {
+        const auto &writes=fake_wire_writes;
+        const auto feature=std::find_if(writes.begin(),writes.end(),[g](const auto &p) {
+            return p.size()==21 && p[4]==0xfd && p[5]==P4_STREAM_IDS[g];
+        });
+        assert(feature!=writes.end());
+        const uint8_t *p=feature->data()+9;
+        const uint32_t interval=p[0] | (uint32_t(p[1])<<8) | (uint32_t(p[2])<<16) | (uint32_t(p[3])<<24);
+        assert(interval==20000U);
+    }
     assert(p4_imu_diagnostics().epoch==1);
     assert(p4_imu_lab_info().rv_confirmed_us==-1 && p4_imu_lab_info().game_confirmed_us==-1);
     // GET_FEATURE_RESP is the sensor-reported interval, distinct from our request.
@@ -127,6 +138,10 @@ int main()
     assert(feature.known && feature.generation==1 && feature.config.reportInterval_us==10000);
     assert(feature.config.batchInterval_us==1234 && feature.config.sensorSpecific==42 && feature.config.changeSensitivity==7);
     assert(feature.config.changeSensitivityEnabled && feature.config.changeSensitivityRelative && feature.config.wakeupEnabled && feature.config.alwaysOnEnabled);
+    // Separate SHTP transfers can arrive between two Arduino loop iterations.
+    report(3); report(4);
+    p4_imu_poll();
+    assert(p4_imu_snapshot(&sample) && sample.sequence==4);
     const auto before=p4_imu_diagnostics();
     p4_imu_poll(); assert(p4_imu_diagnostics().empty_reads==before.empty_reads+1);
     fake_wire_read_error=true; p4_imu_poll(); fake_wire_read_error=false;
@@ -159,6 +174,24 @@ int main()
     uint8_t out[384]{}; uint32_t time=0;
     assert(i2chal_read(nullptr,out,sizeof(out),&time)==384 && time!=0);
     assert(out[4]==0x55 && out[383]==0x55 && fake_wire_packets.empty());
+    // A null response on the first reread is neither a sample nor proof
+    // of an empty FIFO. A damaged continuation remains an I/O error.
+    unsigned reads=0;
+    fake_wire_on_read=[&reads](auto &bytes, size_t) {
+        if (++reads==2) std::fill(bytes.begin(),bytes.end(),0);
+    };
+    const auto previous=p4_imu_diagnostics();
+    packet(3,{1,2,3});
+    assert(i2chal_read(nullptr,out,sizeof(out),&time)==0);
+    assert(p4_imu_diagnostics().empty_rereads==previous.empty_rereads+1);
+    assert(p4_imu_diagnostics().empty_reads==previous.empty_reads);
+    assert(p4_imu_diagnostics().io_errors==previous.io_errors);
+    fake_wire_on_read=[&reads](auto &bytes, size_t) { if (++reads==3) bytes[2]^=1; };
+    reads=0;
+    packet(3,std::vector<uint8_t>(150,0x55));
+    assert(i2chal_read(nullptr,out,sizeof(out),&time)==0 && reads==3);
+    assert(!strcmp(p4_imu_diagnostics().last_io_stage,"CHUNK"));
+    fake_wire_on_read={};
     assert(i2chal_write(nullptr,out,129)==SH2_ERR_IO);
     // Manual recovery performs one reset, no automatic SAVE, then succeeds.
     replies_enabled=true; p4_imu_request_reset(); p4_imu_poll();
