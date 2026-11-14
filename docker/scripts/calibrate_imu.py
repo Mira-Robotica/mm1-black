@@ -80,7 +80,18 @@ class Monitor:
         return self.receive_reply(command)
 
     def receive_reply(self, command):
-        line = self.reader.read(command)
+        started = time.monotonic()
+        try:
+            line = self.reader.read(command)
+        except TimeoutError as exc:
+            pending = bytes(self.reader.buffer)
+            self.journal.write("response_timeout", command=command,
+                               timeout_s=self.timeout,
+                               elapsed_s=time.monotonic() - started,
+                               partial_bytes=len(pending), partial_hex=pending.hex(),
+                               session_id=self.owned, last_state=self.current)
+            raise TimeoutError(f"{exc} ({len(pending)} bytes recebidos da linha; "
+                               f"prazo {self.timeout:g} s)") from exc
         self.journal.write("response", command=command, line=line)
         prefix = "# OK CAL_IMU" if line.startswith("# OK CAL_IMU ") else "# ERR CAL_IMU"
         values = fields(line, prefix, (
