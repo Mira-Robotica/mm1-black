@@ -13,7 +13,7 @@
 #include <cstdarg>
 
 namespace lab {
-const char STREAM_HEADER[] = "session_id,seq,device_ms,updated_mask,valid_mask,value_updated_mask,raw_age_ms,uncal_age_ms,cal_age_ms,rv_age_ms,grv_age_ms,mag_raw_x_adc,mag_raw_y_adc,mag_raw_z_adc,mag_uncal_x_uT,mag_uncal_y_uT,mag_uncal_z_uT,mag_cal_x_uT,mag_cal_y_uT,mag_cal_z_uT,rv_azimuth_deg,rv_inclination_deg,rv_roll_deg,grv_azimuth_deg,grv_inclination_deg,grv_roll_deg,mag_raw_azimuth_deg,mag_uncal_azimuth_deg";
+const char STREAM_HEADER[] = "session_id,seq,device_ms,updated_mask,valid_mask,value_updated_mask,raw_age_ms,uncal_age_ms,cal_age_ms,rv_age_ms,grv_age_ms,mag_raw_x_adc,mag_raw_y_adc,mag_raw_z_adc,mag_uncal_x_uT,mag_uncal_y_uT,mag_uncal_z_uT,mag_cal_x_uT,mag_cal_y_uT,mag_cal_z_uT,rv_azimuth_deg,rv_inclination_deg,rv_roll_deg,grv_azimuth_deg,grv_inclination_deg,grv_roll_deg,mag_cal_azimuth_deg,rv_status,grv_status,rv_accuracy_rad";
 namespace {
 enum class Phase { Idle, ReadCal, ReadFeatures, Configuring, Streaming, Restoring, Failed };
 Phase phase = Phase::Idle;
@@ -39,7 +39,7 @@ void record_feature_failure(const char *operation, int rc)
 char notice[256]{};
 sh2_SensorConfig_t original[5]{}, requested[5]{}, confirmed[5]{};
 P4ImuStreamSample cached[5]{};
-float values[17]{};
+float values[19]{};
 uint32_t valid_mask=0, value_updated=0, updated=0;
 uint32_t queued_updated=0, queued_values=0;
 constexpr uint32_t OP_MS=2000, HEARTBEAT_MS=15000;
@@ -128,16 +128,18 @@ void samples()
         if (g<3) for (unsigned k=0; k<3; ++k) set_value(3*g+k,s.v[k]);
         else {
             const auto a=orientation(s.v[0],s.v[1],s.v[2],s.v[3],1,0,0);
+            set_value(g==3 ? 16 : 17,s.status);
+            if (g==3) set_value(18,s.accuracy_rad);
             const unsigned base=g==3 ? 9 : 12;
             set_value(base,a.azimuth); set_value(base+1,a.inclination); set_value(base+2,a.roll);
         }
         // Raw axes/scales are unverified: never fabricate a Raw heading.
-        if (g==1) {
+        if (g==2) {
             const auto &q=incoming[4];
             const int32_t separation=int32_t(s.received_ms-q.received_ms);
             if (q.valid && q.epoch==epoch && separation>=-200 && separation<=200 &&
                 uint32_t(millis()-q.received_ms)<=200 && uint32_t(millis()-s.received_ms)<=200)
-                set_value(16,magnetic_azimuth(q.v,s.v,0.01f));
+                set_value(15,magnetic_azimuth(q.v,s.v,0.01f));
         }
     }
 }
@@ -306,10 +308,10 @@ bool stream_output(char *out,size_t size,bool replace_snapshot)
         w.add("# OK STREAM_IMU READY session_id=%lu\n",(unsigned long)sid); ++preamble;
     } else if (preamble==2) {
         const auto i=p4_imu_lab_info();
-        w.add("# STREAM_META schema=1 firmware=" FW_VERSION " session_id=%lu epoch=%lu rate_hz=%.9g part=%lu build=%lu fw=%u.%u.%u cal_mask=%u cal_source=GET_CAL dcd_autosave=disabled_sent_unacknowledged reports=22,15,3,5,8 config_order=raw,uncal,cal,rv,grv config_fields=interval_us/batch_us/flags/change/specific",
+        w.add("# STREAM_META schema=2 firmware=" FW_VERSION " session_id=%lu epoch=%lu rate_hz=%.9g part=%lu build=%lu fw=%u.%u.%u cal_mask=%u cal_source=GET_CAL dcd_autosave=disabled_sent_unacknowledged reports=22,15,3,5,8 config_order=raw,uncal,cal,rv,grv config_fields=interval_us/batch_us/flags/change/specific",
             (unsigned long)sid,(unsigned long)epoch,(double)rate,(unsigned long)i.part,(unsigned long)i.build,i.major,i.minor,i.patch,cal_mask);
         config_text(w,"previous",original); config_text(w,"requested",requested); config_text(w,"confirmed",confirmed);
-        w.add(" quaternion=wxyz front=+X rv_world=ENU rv_reference=magnetic grv_reference=arbitrary inclination=beam_production_pitch angular_correction=none raw_mapping=unknown raw_azimuth=unavailable tilt_source=GRV mag_azimuth_method=atan2_left_forward_v2 max_pair_ms=200 norm_tolerance=0.02 singularity_epsilon=1e-5 uncal_horizontal_min_uT=0.01 raw_horizontal_min_adc=unknown heartbeat_ms=15000\n");
+        w.add(" quaternion=wxyz front=+X rv_world=ENU rv_reference=magnetic grv_reference=arbitrary inclination=beam_production_pitch angular_correction=none raw_mapping=unknown raw_azimuth=unavailable tilt_source=GRV mag_azimuth_method=atan2_left_forward_v2 max_pair_ms=200 norm_tolerance=0.02 singularity_epsilon=1e-5 cal_horizontal_min_uT=0.01 raw_horizontal_min_adc=unknown heartbeat_ms=15000\n");
         ++preamble;
     } else if (preamble==3) { w.add("%s\n",STREAM_HEADER); preamble=0; }
     else {
@@ -322,7 +324,7 @@ bool stream_output(char *out,size_t size,bool replace_snapshot)
         for (const auto &s:cached) {
             w.add(","); if (s.valid) w.add("%lu",(unsigned long)(millis()-s.received_ms));
         }
-        for (unsigned i=0;i<17;++i) { w.add(","); if (valid_mask & (1UL<<i)) w.add("%.9g",(double)values[i]); }
+        for (unsigned i=0;i<19;++i) { w.add(","); if (valid_mask & (1UL<<i)) w.add("%.9g",(double)values[i]); }
         w.add("\n"); updated=value_updated=0;
     }
     if (!w.ok) { restore("FORMAT_FAILED"); return false; }

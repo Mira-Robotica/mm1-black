@@ -80,6 +80,7 @@ struct P4ImuLabInfo {
 #include "SparkFun_BNO08x_Arduino_Library-1.0.6/src/sh2.h"
 constexpr uint8_t P4_STREAM_IDS[5] = {0x16, 0x0f, 0x03, 0x05, 0x08};
 struct P4ImuStreamSample {
+    float accuracy_rad = 0;
     float v[4]{}; // magnetic xyz or quaternion wxyz, never normalized
     uint32_t generation = 0, received_ms = 0, epoch = 0, raw_timestamp_us = 0;
     uint8_t sequence = 0, status = 0;

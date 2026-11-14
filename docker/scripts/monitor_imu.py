@@ -22,7 +22,7 @@ from status import ProtocolError, fields, parse_hello
 VALUES = (
     "mag_raw_x_adc,mag_raw_y_adc,mag_raw_z_adc,mag_uncal_x_uT,mag_uncal_y_uT,mag_uncal_z_uT,"
     "mag_cal_x_uT,mag_cal_y_uT,mag_cal_z_uT,rv_azimuth_deg,rv_inclination_deg,rv_roll_deg,"
-    "grv_azimuth_deg,grv_inclination_deg,grv_roll_deg,mag_raw_azimuth_deg,mag_uncal_azimuth_deg"
+    "grv_azimuth_deg,grv_inclination_deg,grv_roll_deg,mag_cal_azimuth_deg,rv_status,grv_status,rv_accuracy_rad"
 ).split(",")
 ENVELOPE = "session_id,seq,device_ms,updated_mask,valid_mask,value_updated_mask,raw_age_ms,uncal_age_ms,cal_age_ms,rv_age_ms,grv_age_ms".split(",")
 HEADER = ",".join(ENVELOPE + VALUES)
@@ -71,34 +71,36 @@ class Samples:
     def __init__(self, session):
         self.session = session
         self.seq = 0
-        self.retained = [None] * 17
+        self.retained = [None] * 19
         self.ages = [None] * 5
 
     def accept(self, line):
         # Structural corruption discards the whole row; a bad scientific group
         # affects only that group. Finite angles are already computed on device.
         cells = line.split(",")
-        if len(line) > MAX_LINE or len(cells) != len(ENVELOPE) + 17:
+        if len(line) > MAX_LINE or len(cells) != len(ENVELOPE) + 19:
             return None
         try:
             sid, seq, device, groups, valid, new = (uint(cells[i]) for i in range(6))
-            if sid != self.session or seq <= self.seq or groups > 31 or valid > 0x1FFFF or new & ~valid:
+            if sid != self.session or seq <= self.seq or groups > 31 or valid > 0x7FFFF or new & ~valid:
                 return None
             ages = [None if not c else uint(c) for c in cells[6:11]]
         except ValueError:
             return None
-        fresh = [None] * 17
-        parsed = [None] * 17
+        fresh = [None] * 19
+        parsed = [None] * 19
         for i, c in enumerate(cells[11:]):
             try:
                 v = float(c)
                 if not math.isfinite(v) or not valid & (1 << i):
                     continue
-                if i == 15:  # schema 1 advertises unknown Raw mapping
+                if i in (16, 17) and (v != int(v) or not 0 <= v <= 3):
+                    continue
+                if i == 18 and v < 0:
                     continue
                 if i < 3 and (v != int(v) or not -32768 <= v <= 32767):
                     continue
-                if i in (9, 12, 15, 16) and not 0 <= v < 360:
+                if i in (9, 12, 15) and not 0 <= v < 360:
                     continue
                 if i in (10, 13) and not -90.001 <= v <= 90.001:
                     continue
@@ -112,7 +114,7 @@ class Samples:
             if any(parsed[i] is None for i in range(start, start + 3)):
                 parsed[start:start + 3] = [None] * 3
         for i, v in enumerate(parsed):
-            group = i // 3 if i < 9 else 3 if i < 12 else 4 if i < 15 else 0 if i == 15 else 1
+            group = i // 3 if i < 9 else 3 if i < 12 else 4 if i < 15 else 2 if i == 15 else 4 if i == 17 else 3
             if v is not None and new & (1 << i) and groups & (1 << group) and ages[group] is not None:
                 fresh[i] = v
                 self.retained[i] = v
@@ -127,12 +129,12 @@ def parse_stream_meta(line, session):
         "dcd_autosave", "reports", "config_order", "config_fields", "previous", "requested", "confirmed",
         "quaternion", "front", "rv_world", "rv_reference", "grv_reference", "inclination", "angular_correction",
         "raw_mapping", "raw_azimuth", "tilt_source", "max_pair_ms", "norm_tolerance", "singularity_epsilon",
-        "uncal_horizontal_min_uT", "raw_horizontal_min_adc", "heartbeat_ms"))
-    expected = {"schema": "1", "session_id": str(session), "reports": "22,15,3,5,8",
+        "cal_horizontal_min_uT", "raw_horizontal_min_adc", "heartbeat_ms"))
+    expected = {"schema": "2", "session_id": str(session), "reports": "22,15,3,5,8",
                 "config_order": "raw,uncal,cal,rv,grv", "quaternion": "wxyz", "front": "+X", "rv_world": "ENU",
                 "rv_reference": "magnetic", "grv_reference": "arbitrary", "inclination": "beam_production_pitch",
                 "angular_correction": "none", "raw_mapping": "unknown", "raw_azimuth": "unavailable", "tilt_source": "GRV", "max_pair_ms": "200",
-                "norm_tolerance": "0.02", "singularity_epsilon": "1e-5", "uncal_horizontal_min_uT": "0.01",
+                "norm_tolerance": "0.02", "singularity_epsilon": "1e-5", "cal_horizontal_min_uT": "0.01",
                 "raw_horizontal_min_adc": "unknown", "heartbeat_ms": "15000",
                 "cal_source": "GET_CAL", "dcd_autosave": "disabled_sent_unacknowledged",
                 "config_fields": "interval_us/batch_us/flags/change/specific"}
@@ -227,9 +229,9 @@ class Panel:
         for g, name in enumerate(("Raw", "Uncalibrated", "Calibrated")):
             rows.append(f"{name:20} {val(3*g):>11} {val(3*g+1):>11} {val(3*g+2):>11}  {'ADC' if g == 0 else 'µT'}")
         rows += ["", "Orientação           Azimute  Inclinação (pitch)        Roll  graus",
-                 f"RV (magnético)       {val(9):>11} {val(10):>17} {val(11):>11}",
-                 f"GRV (arbitrário)      {val(12):>11} {val(13):>17} {val(14):>11}",
-                 f"Azimute Raw indicativo: {val(15)} (eixos não verificados) | Uncalibrated: {val(16)}",
+                 f"RV (magnético)       {val(9):>11} {val(10):>17} {val(11):>11}  qualidade={val(16)}/3 | precisão={val(18)} rad",
+                 f"GRV (arbitrário)      {val(12):>11} {val(13):>17} {val(14):>11}  qualidade={val(17)}/3",
+                 f"Azimute Calibrated: {val(15)}° | qualidade: 0=não confiável, 1=baixa, 2=média, 3=alta",
                  "Idade Raw/Uncal/Cal/RV/GRV (ms): " + "/".join("—" if a is None else str(a) for a in sample.ages)]
         if self.tty:
             if not self.started:
@@ -263,8 +265,8 @@ def run(args, stop, output=sys.stdout):
             sock.sendall((command + "\n").encode("ascii"))
         hello = parse_hello(reader.read(args.timeout))
         meta = fields(reader.read(args.timeout), "# META", ("commands",))
-        if meta.get("stream_imu") != "1" or meta.get("stream_schema") != "1":
-            raise ProtocolError("Firmware sem capability stream_imu=1/stream_schema=1; atualize mm1_p4_lab")
+        if meta.get("stream_imu") != "1" or meta.get("stream_schema") != "2":
+            raise ProtocolError("Firmware sem capability stream_imu=1/stream_schema=2; atualize mm1_p4_lab")
         send("STATUS")
         status = fields(reader.read(args.timeout), "# OK STATUS", ())
         if stop():
@@ -303,11 +305,11 @@ def run(args, stop, output=sys.stdout):
         if abs(float(stream_meta["rate_hz"]) - args.rate_hz) > 1e-5:
             raise ProtocolError("STREAM_META: taxa diferente da solicitada")
         if receive(time.monotonic() + args.timeout) != HEADER:
-            raise ProtocolError("Cabeçalho incompatível com stream_schema=1")
+            raise ProtocolError("Cabeçalho incompatível com stream_schema=2")
         started = time.monotonic()
         metadata = {
             "session_id": session, "started_utc": datetime.now(timezone.utc).isoformat(),
-            "client": {"version": "1", "commit": client_commit(), "configuration": vars(args)},
+            "client": {"version": "2", "commit": client_commit(), "configuration": vars(args)},
             "notes": args.notes, "hello": hello, "meta": meta, "status_before": status, "stream": stream_meta,
             "reports": [{"id": i, "name": n, "unit": u} for i, n, u in (
                 (22, "Raw Magnetometer", "ADC"), (15, "Magnetic Field Uncalibrated", "uT"),
@@ -315,6 +317,7 @@ def run(args, stop, output=sys.stdout):
                 (8, "Game Rotation Vector", "quaternion wxyz"))],
             "retention": "terminal: last valid per field; CSV: only valid updates in each accepted snapshot, otherwise empty",
             "time": "elapsed_s: PC monotonic since metadata/start of recording; asynchronous reports, not synchronized acquisition",
+            "magnetic_source": "calibrated",
             "magnetic_method": magnetic_method(stream_meta),
             "raw_limitation": "Native ADC values retained. Axis/scale mapping unverified; Raw azimuth unavailable.",
             "uncalibrated": "Soft iron corrected by sensor; hard iron bias is not subtracted by monitor",

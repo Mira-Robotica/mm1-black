@@ -63,6 +63,7 @@ void stream_sensor(const sh2_SensorValue_t &v)
     } else if (group == 3) {
         const auto &q = v.un.rotationVector;
         next.v[0] = q.real; next.v[1] = q.i; next.v[2] = q.j; next.v[3] = q.k;
+        next.accuracy_rad = q.accuracy;
         if (!std::isfinite(q.accuracy) || q.accuracy < 0) return;
     } else {
         const auto &q = v.un.gameRotationVector;
