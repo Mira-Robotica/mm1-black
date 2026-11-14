@@ -28,7 +28,7 @@ que a primeira captura funcione, as demais são executadas e preservadas. Não
 há tentativas extras além da quantidade configurada para buscar um sucesso.
 
 O lote é coordenado no PC: cada pedido é `CAPTURE <id> 1` (ou `CAPTURE_IMU <id> 1`
-com laser desabilitado) do schema 3,
+com laser desabilitado) do schema de captura,
 com ID diferente e nova conexão. Esta decisão substitui, para este experimento,
 a proposta de um único comando `CAPTURE <id> n`. Não é necessário atualizar o
 firmware para usar vários pedidos por pose. A retentativa interna da IMU requer
@@ -350,3 +350,10 @@ incrementos 4/5/6, a recuperação do laser ou a validação de precisão e
 alinhamento de referenciais. Após a correção do encerramento, a suíte Python
 completa passou com 79 testes, incluindo Stop concorrente/recusado e diagnóstico
 de `CONTROL_MANUAL_STOP`.
+
+
+Nos experimentos 2 e 3, cada tentativa grava a linha completa de `CAPTURE_IMU` em
+`trena.capture.sample` no JSONL. Com o firmware de schema 4, ela inclui os eixos
+Raw e Uncalibrated, os ângulos do GRV, o azimute do campo calibrado e as idades
+dos cinco relatórios. Confira o schema no registro `preflight`. As unidades e os
+nomes das colunas estão na [tabela da captura](README.md#testar-uma-aquisição-schema-4).

@@ -25,7 +25,7 @@ Exemplo de saída do firmware do incremento 1 (valores ilustrativos):
 # OK STATUS stage=network_only wifi=CONNECTED ip=192.168.1.123 rssi_dbm=-50 tcp=LISTENING port=5000 hosted=1 sensors=NOT_IMPLEMENTED attempt=1 disconnect_reason=0 uptime_ms=1234
 ```
 
-A execução sem `--capture` termina após o `STATUS`, sem solicitar medição. No incremento 6, as respostas informam `HELLO MM1LAB 3 stage=multi_report_capture`, `schema=3`, `capture=single` e `sensors=ENABLED`, além dos diagnósticos de sensores. Feche outros clientes TCP antes do teste: o firmware aceita apenas uma conexão por vez.
+A execução sem `--capture` termina após o `STATUS`, sem solicitar medição. No firmware de laboratório atual, as respostas informam `HELLO MM1LAB 3 stage=multi_report_capture`, `schema=4`, `capture=single` e `sensors=ENABLED`, além dos diagnósticos de sensores. Feche outros clientes TCP antes do teste: o firmware aceita apenas uma conexão por vez.
 
 ## Calibrar a IMU (incremento 4)
 
@@ -40,7 +40,7 @@ O serviço usa rede host, TTY interativo e o mesmo volume de dados. Logs JSONL c
 
 Veja [o guia completo](../docs/LAB_CALIBRACAO_IMU_P4.md) para preparar o ambiente, usar a serial, interpretar qualidade/DCD, configurar prazos e executar o aceite físico. A implementação e os testes em software não comprovam persistência após desligar/ligar o BNO.
 
-## Testar uma aquisição (incremento 6 / schema 3)
+## Testar uma aquisição (schema 4)
 
 Após gravar o novo firmware e reconstruir a imagem, mantenha a trena parada e execute:
 
@@ -54,12 +54,26 @@ Para adquirir apenas RV, GRV e campo magnético, acrescente **`--use-laser false
 ao comando acima. Isso envia `CAPTURE_IMU 1 1` e requer o firmware atualizado
 que anuncia `CAPTURE_IMU` em META. A distância fica vazia, com
 `laser_error=LASER_DISABLED` e `DONE.laser_requested=0`; `OK` considera apenas
-os três relatórios solicitados. `--use-laser true` é o padrão e preserva
+os cinco relatórios solicitados. `--use-laser true` é o padrão e preserva
 a captura completa. Reconstrua a imagem deste cliente após atualizar os scripts.
 No [experimento com poses](EXPERIMENTO_POSES.md#capturar-somente-a-imu), o parâmetro
 correspondente é `use_laser:=false`, sem necessidade de reconstruir a imagem Kinova.
 
-A saída conserva distância original, quaternion/ângulos/qualidade do RV, quaternion/qualidade do GRV e componentes XYZ/qualidade do campo magnético calibrado em µT. Cada relatório tem validade/erro e sequência próprios, e até a falha de todos produz uma linha. Os ângulos continuam derivados somente do RV; o heading do GRV é arbitrário e não é realinhado ao norte. `n_imu_valid` conta RV; `n_grv_valid` e `n_mag_valid` contam os novos relatórios; `n_valid` e `result=OK` exigem os quatro resultados válidos. Singularidades podem deixar somente alguns ângulos vazios; quaternion/qualidade válidos são preservados. O JSONL em `docker/data/capture.jsonl` registra as linhas CSV e os campos interpretados, além dos horários da transação no PC. Ainda não há um arquivo CSV de poses do manipulador.
+O CSV e o JSONL (`capture.sample`) conservam os quaternions e a qualidade de fusão. Os dois comandos fornecem as mesmas grandezas da IMU que o monitor:
+
+| Grandeza | Campos da captura |
+| --- | --- |
+| Magnetômetro Raw, contagens ADC nos eixos nativos | `mag_raw_{x,y,z}_adc` |
+| Campo Uncalibrated e Calibrated, µT | `mag_uncal_{x,y,z}_uT` e `mag_{x,y,z}_ut` |
+| Azimute, inclinação do feixe e roll do RV | `azimuth_deg`, `inclination_deg`, `roll_deg` |
+| Azimute relativo, inclinação do feixe e roll do GRV | `grv_azimuth_deg`, `grv_inclination_deg`, `grv_roll_deg` |
+| Qualidade RV e GRV (0–3) e precisão angular estimada do RV | `imu_status`, `grv_status`, `accuracy_rad` |
+| Azimute do campo calibrado | `mag_cal_azimuth_deg` |
+| Idade de cada relatório no fim da captura, em ms desde a recepção na trena | `raw_age_ms`, `uncal_age_ms`, `cal_age_ms`, `rv_age_ms`, `grv_age_ms` |
+
+A trena calcula o azimute calibrado com a frente +X e a vertical do GRV, sem offset angular. Usa os relatórios Calibrated e GRV da própria captura quando ambos têm até 200 ms no instante do cálculo. Campo horizontal abaixo de 0,01 µT, geometria singular ou ausência de um par válido deixam a célula vazia. Zero é uma leitura válida. O GRV mantém referência de azimute arbitrária.
+
+Cada captura espera relatórios novos e preserva os recebidos em caso de falha parcial. `raw_valid/raw_error` e `uncal_valid/uncal_error` indicam o resultado dos dois novos relatórios. `DONE.result=OK` exige os cinco relatórios válidos e, quando solicitado, o laser válido. Os ângulos podem ficar individualmente vazios mesmo com relatórios válidos.
 
 Os metadados preservam IDs, unidades/referenciais, intervalos nominais e a identificação do driver. `STATUS` registra intervalos solicitados e confirmados pelo sensor (`-1` se ainda desconhecidos), além dos contadores por relatório. Os 50 Hz nominais não comprovam a taxa real entregue.
 
@@ -95,7 +109,7 @@ O volume mantém os registros após `--rm`. `.env` e os dados gerados ficam fora
 
 O Compose usa **`network_mode: host`**, sem bridge adicional nem publicação de portas. O ambiente de referência é Docker Engine no Linux; o contêiner compartilha as interfaces e rotas do PC. Não usa `privileged`, USB ou acesso ao socket Docker. Rotas, firewall e isolamento do AP ainda precisam permitir a comunicação. Veja a [documentação da rede host](https://docs.docker.com/engine/network/drivers/host/).
 
-O cliente aceita IPv4 numérico para evitar uma espera de DNS fora do timeout. O timeout aplica-se separadamente à conexão, ao envio e à leitura de cada linha completa; bytes chegando aos poucos não reiniciam o prazo da linha. Após ACK de captura, a espera por linha passa a ser o prazo anunciado (até 9 s) mais a margem `--timeout`. Cada linha recebida pode ter até 2048 bytes, com LF ou CRLF. STATUS aceita protocolo 2 (`network_only`/`unit_capture`) e 3 (`multi_report_capture`). CAPTURE exige protocolo/schema 3 e recusa versões anteriores explicitamente. São verificados ID, cabeçalho, finitude/norma dos quaternions, validade, qualidade, epoch, reset e contagens do DONE. O monitor de calibração aceita os dois cumprimentos e mantém `cal_schema=1`.
+O cliente aceita IPv4 numérico para evitar uma espera de DNS fora do timeout. O timeout aplica-se separadamente à conexão, ao envio e à leitura de cada linha completa; bytes chegando aos poucos não reiniciam o prazo da linha. Após ACK de captura, a espera por linha passa a ser o prazo anunciado (até 9 s) mais a margem `--timeout`. Cada linha recebida pode ter até 2048 bytes, com LF ou CRLF. STATUS aceita protocolo 2 (`network_only`/`unit_capture`) e 3 (`multi_report_capture`). Os clientes de captura aceitam protocolo 3 com schemas 3 e 4. Os campos adicionais exigem firmware com schema 4. São verificados ID, cabeçalho, finitude/norma dos quaternions, validade, qualidade, epoch, reset e contagens do DONE. O monitor de calibração aceita os dois cumprimentos e mantém `cal_schema=1`.
 
 Código de saída:
 

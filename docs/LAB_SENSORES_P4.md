@@ -1,8 +1,8 @@
 # Captura unitária pelo Wi-Fi: incrementos 3 e 6
 
-Guia da captura atualizado para o schema 3 em 16/10/2026 (incremento 6). Para calibração nativa da IMU, veja [LAB_CALIBRACAO_IMU_P4.md](LAB_CALIBRACAO_IMU_P4.md).
+O firmware atual usa o [schema 4 de captura](../docker/README.md#testar-uma-aquisição-schema-4). As seções sobre o incremento 6 documentam o schema 3. Para calibração nativa da IMU, veja [LAB_CALIBRACAO_IMU_P4.md](LAB_CALIBRACAO_IMU_P4.md).
 
-O alvo `mm1_p4_lab` oferece `STATUS` e `CAPTURE <request_id> [1]` por TCP e pela serial. Cada pedido avalia uma transação do laser e, em seguida, um relatório novo de cada tipo: Rotation Vector (RV), Game Rotation Vector (GRV) e Magnetic Field Calibrated, inclusive quando o laser falha. O dispositivo deve permanecer parado até o término. Lotes com `n>1` pertencem ao incremento 7.
+O alvo `mm1_p4_lab` oferece `STATUS`, `CAPTURE <request_id> [1]` e `CAPTURE_IMU <request_id> [1]` por TCP e pela serial. A captura espera um relatório novo de RV, GRV e de cada campo magnético (Raw, Uncalibrated e Calibrated). Em `CAPTURE`, a aquisição da IMU começa após a tentativa do laser, inclusive quando a distância falha. O dispositivo deve permanecer parado até o término. Lotes com `n>1` pertencem ao incremento 7.
 
 Desde o incremento 5, o lab usa SparkFun 1.0.6 e I²C1 de hardware. A montagem atual (13/10/2026) usa **SDA25/SCL34 e NRST49**. O usuário identificou mau contato no I²C e relatou inversão acidental da alimentação; retirou os GPIO30/31/32 instáveis por suspeita de dano e percebeu maior estabilidade após remapear os pinos, com o reset conectado. Ver [integração e relato de bancada](LAB_IMU_SPARKFUN_P4.md); os resultados de captura abaixo são históricos. O relato anterior de calibração do magnetômetro e qualidade RV **3/3** permanece registrado, com estabilidade quantitativa e persistência DCD ainda a verificar.
 
@@ -134,13 +134,41 @@ O prazo padrão da resposta do laser é 3200 ms, com teto de 4500 ms para toda a
 
 Reset da IMU invalida os três caches e tenta reabilitar os três relatórios. `imu_epoch` muda a cada inicialização/reset e identifica a sessão junto de `boot_id`. Se houver reset durante a tentativa, conserva os dados anteriores, marca os ausentes com `IMU_RESET` e emite `imu_reset=1` no DONE. Não usa relatórios pós-reset para completar a mesma linha. A linha conserva a epoch original; a próxima tentativa usa a nova epoch. O heading arbitrário do GRV não é realinhado automaticamente. Falha na reabilitação deixa `imu=NOT_READY` até reinicializar o dispositivo. Falhas de barramento ou decodificação são separadas (`IMU_IO_ERROR`, `IMU_DECODE_ERROR`).
 
-O lab usa timeout Wire de 50 ms por transação no I²C de hardware. Leituras recompõem pacotes em blocos de 32 bytes e podem exigir várias transações; o orçamento agregado de 100 ms do bit-bang foi removido. O timeout Wire não equivale a um limite configurado de clock stretching. Uma escrita com erro retorna falha ao SHTP, evitando repetição ilimitada; escritas maiores que 32 bytes são recusadas, sem truncamento. Os comandos utilizados nesta etapa cabem nesse limite. A UART é atendida em blocos limitados, sem `delay`/`flush` no polling. Os tempos efetivos do transporte precisam ser medidos na placa.
+O lab usa timeout Wire de 50 ms por transação no I²C de hardware. Leituras recompõem pacotes em blocos de 128 bytes e podem exigir várias transações; o orçamento agregado de 100 ms do bit-bang foi removido. O timeout Wire não equivale a um limite configurado de clock stretching. Uma escrita com erro retorna falha ao SHTP, evitando repetição ilimitada; escritas maiores que 128 bytes são recusadas, sem truncamento. Os comandos utilizados nesta etapa cabem nesse limite. A UART é atendida em blocos limitados, sem `delay`/`flush` no polling. Os tempos efetivos do transporte precisam ser medidos na placa.
 
 O ACK anuncia um teto conservador de 9000 ms; o cliente soma a margem `--timeout` (padrão 5 s) à espera de cada linha da captura. O firmware limita envio pendente a 2 s e conexões sem comandos a 60 s. Fechar a conexão cancela a aquisição TCP e envia desligamento do laser. `STATUS` continua sendo atendido durante a aquisição, sujeito aos bloqueios limitados do transporte da IMU.
 
 **Após timeout, resposta inválida ou cancelamento com uma medição pendente, o laser fica em `RESYNC_REQUIRED`.** As próximas solicitações devolvem `LASER_RESYNC_REQUIRED` e continuam tentando a IMU. A UART é drenada, mas isso não prova que a medição anterior terminou: não há identificador de transação no protocolo conhecido. Nesta etapa a recuperação exige desligar e ligar a alimentação do conjunto, incluindo o módulo laser; reiniciar apenas o ESP não garante que o módulo abandonou o pedido antigo. Não há recuperação automática por simples espera. Validar uma sequência de recuperação do módulo é pendência de bancada para o incremento 7.
 
 Em `STATUS`, `sensors=ENABLED` significa que a camada de aquisição foi compilada. `laser=READY` significa que o transporte está disponível para uma tentativa, não que um sensor desconectado já tenha sido detectado. Confira o resultado da captura. Os contadores de relatórios, resets, erros I²C/decoder e saltos de sequência ajudam no diagnóstico; o contador de saltos não equivale a um número comprovado de amostras perdidas.
+
+Com os cinco relatórios habilitados, o driver processa até oito transferências SHTP
+por ciclo. Após cada transferência, encerra a rodada se passaram 8 ms, a fila
+esvaziou, ocorreu erro ou o sensor pediu reconfiguração. Em caso de
+`IMU_IO_ERROR`, compare dois `STATUS` no mesmo boot. `imu_empty_reads` conta
+sondagens de comprimento com fila vazia que permitem estabelecer a barreira de novidade.
+`imu_empty_rereads` conta as vezes em que a primeira releitura de um pacote
+anunciado retornou somente zeros. O driver descarta essa resposta e sonda a
+fila novamente. Nenhuma amostra ou confirmação de fila vazia é produzida por
+essa releitura.
+`imu_last_io_stage` identifica o último erro acumulado. Por exemplo, `CHUNK`
+indica divergência de comprimento ou canal em um cabeçalho repetido de I²C.
+Um erro anterior continua visível mesmo depois de uma captura bem-sucedida.
+
+
+## Verificação em bancada de CAPTURE_IMU em 14/11/2026
+
+Antes do ajuste, seis pedidos consecutivos terminaram com `IMU_IO_ERROR` nos
+cinco relatórios. O log serial registrou cabeçalhos zerados na primeira
+releitura após o anúncio de pacotes de 80, 49 e 33 bytes. Com a revisão
+`fd0149c+mm1.7`, I²C a 100 kHz e intervalo solicitado de 20 ms para os
+cinco relatórios, 100 de 100 pedidos via TCP retornaram `OK` no mesmo boot
+(`8ef61b4184ceb747`). O contador global avançou em 84 releituras vazias e
+cinco erros de I/O, com zero erros de decodificação. As 100 respostas DONE
+indicaram zero erros de I/O durante o pedido. Em seguida, o comando Docker
+`status --capture 1 --use-laser false` também retornou os cinco relatórios
+válidos, sem repetição. O ensaio verifica a entrega; a qualidade de fusão
+continuou registrada separadamente (RV 0 e GRV 3 nessa última leitura).
 
 ## Verificação do incremento 6 — 16/10/2026
 

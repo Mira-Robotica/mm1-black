@@ -38,7 +38,7 @@ Somente `mm1_p4_lab` usa `src/board/p4/imu_sparkfun/p4_imu.cpp` e a biblioteca f
 | Endereço | 0x4B, alternativa 0x4A se não houver ACK |
 | NRST | GPIO49, ativo em nível baixo |
 | INT | Não conectado; atendimento por polling |
-| Buffer Wire/SparkFun | 32 bytes, como no padrão da SparkFun; a HAL recompõe os cabeçalhos repetidos de I²C |
+| Buffer Wire/SparkFun | 128 bytes no firmware de laboratório; a HAL recompõe os cabeçalhos repetidos de I²C |
 | Timeout Wire | 50 ms por transação, padrão do core explicitado no adaptador |
 
 Os parâmetros estão em [`config.h`](../src/board/p4/imu_sparkfun/config.h). O I²C0 permanece reservado ao touch/áudio em GPIO7/8. O executável de laboratório usa o driver `i2c_master` do Arduino 3.3.12/IDF 5.5.5, sem o driver legado do Display Panel. `mm1_p4` exclui explicitamente a biblioteca SparkFun e o adaptador; continua com o driver antigo, seu mapa de pinos e `lib_ignore = Wire`. Esse alvo original não incorpora o remapeamento e não corresponde à fiação atual da bancada. `denky32` já exclui toda a árvore `board/`.
@@ -49,7 +49,7 @@ A base é [SparkFun v1.0.6](https://github.com/sparkfun/SparkFun_BNO08x_Arduino_
 
 A comparação mostrou que o `sh2.c` fornecido coincide com a base do driver antigo, descontadas as extensões `MM1_LAB`. Por isso, trocar apenas a pasta não elimina os problemas já reproduzidos. As mudanças ficaram limitadas a três arquivos da biblioteca, com a API cooperativa em arquivos do projeto:
 
-- `SparkFun_BNO08x_Arduino_Library.cpp`: hooks de diagnóstico/reset; preenchimento do tempo exigido pela HAL; buffer de 32 bytes; validação do comprimento e canal dos cabeçalhos repetidos; diagnóstico limitado de cabeçalhos inválidos e eventos SHTP; identificação de leitura realmente vazia; rejeição de cabeçalho/escrita inválidos; erro negativo em falha de escrita. O retorno zero original faz o SHTP repetir indefinidamente. No lab, a abertura não envia soft reset: o adaptador já realizou o reset físico.
+- `SparkFun_BNO08x_Arduino_Library.cpp`: hooks de diagnóstico/reset; preenchimento do tempo exigido pela HAL; buffer de 128 bytes; validação do comprimento e canal dos cabeçalhos repetidos; diagnóstico limitado de cabeçalhos inválidos e eventos SHTP; identificação de leitura realmente vazia; rejeição de cabeçalho/escrita inválidos; erro negativo em falha de escrita. O retorno zero original faz o SHTP repetir indefinidamente. No lab, a abertura não envia soft reset: o adaptador já realizou o reset físico.
 - `sh2.c`: inclusão de `sh2_state.inc` e `sh2_ops.inc` para as operações cooperativas; conservação da máscara de calibração de cinco bits; comprimentos conhecidos dos relatórios usados pelo lab e rejeição de mensagens truncadas; contadores de respostas; verificação de reset **e** anúncio de canal no boot; fechamento seguro de abertura incompleta e cópia limitada da string de versão. Somente Product ID recebeu timeout síncrono de 2 s.
 - `shtp.c`: propaga falha da abertura da HAL e libera a instância, permitindo uma tentativa posterior; valida o anúncio TLV inteiro antes de aplicá-lo, com limites para campos e strings; limita a cópia da versão SHTP e a montagem de fragmentos; rejeita limites de transmissão que não comportam carga útil. Essas verificações evitam sobrescrita de memória e envio sem progresso com pacotes malformados.
 
@@ -68,7 +68,7 @@ Os testes reproduzem a necessidade dos comprimentos conhecidos quando o anúncio
 | Abertura SH-2 | Mantidos os **200 ms originais** para receber reset/anúncio, em vez dos 2 s acrescentados ao driver antigo. Timeout passa a ser falha explícita. |
 | Product ID | 2 s: a operação original não tinha timeout. Necessário para ausência de respostas não travar o firmware. |
 | GET/SET/SAVE | Prazo cooperativo configurado em `LAB_CAL_OP_TIMEOUT_MS`; removido o fallback global de 2 s que alterava todas as operações síncronas do SH-2. |
-| I²C | 50 ms por transação Wire. Leituras usam blocos de até 32 bytes e podem exigir várias transações para recompor um pacote; não há orçamento agregado de 100 ms herdado do bit-bang. A leitura encerra na primeira falha. |
+| I²C | 50 ms por transação Wire. Leituras usam blocos de até 128 bytes e podem exigir várias transações para recompor um pacote; não há orçamento agregado de 100 ms herdado do bit-bang. A leitura encerra na primeira falha. |
 
 A seção 6.5.3 do [datasheet BNO08x v1.16](datasheets/BNO080_085-Datasheet_v1.16.pdf) especifica NRST mínimo de 10 ns, inicialização mínima de 90 ms e configuração típica de 4 ms. O pulso de 10 ms acompanha a escolha conservadora da própria SparkFun; a espera atual de 150 ms antecede a sondagem porque INT não está conectado e incorpora o ajuste empírico relatado pelo usuário. Esses números **não são um máximo garantido de boot do módulo**; devem ser confrontados com os ensaios repetidos.
 
