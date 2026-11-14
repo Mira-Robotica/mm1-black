@@ -27,3 +27,11 @@ services:
     tty: true
     environment:
       LAB_CAL_LOG: "${LAB_CAL_LOG:-}"
+
+  monitor-imu:
+    extends:
+      service: status
+    entrypoint: ["python", "scripts/monitor_imu.py"]
+    stop_grace_period: 30s
+    stdin_open: true
+    tty: true
