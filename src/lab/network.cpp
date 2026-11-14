@@ -14,6 +14,7 @@
 #include "settings.h"
 #include "capture_service.h"
 #include "calibration_service.h"
+#include "stream_service.h"
 
 static_assert(LAB_TCP_PORT > 0 && LAB_TCP_PORT <= 65535, "Invalid TCP port");
 static_assert(LAB_WIFI_CONNECT_TIMEOUT_MS > 0 && LAB_WIFI_CONNECT_TIMEOUT_MS < 0x80000000UL,
@@ -37,6 +38,8 @@ WiFiClient client;
 LabLineReader tcp_line;
 LabLineReader serial_line;
 char tx[2048]{};
+char control[2048]{};
+bool tx_snapshot=false;
 enum class Owner { None, Tcp, Serial };
 Owner owner = Owner::None;
 bool result_queued = false;
@@ -64,13 +67,15 @@ const char *state_name()
 void close_client()
 {
     lab::calibration_disconnect(lab::CalOwner::Tcp);
+    lab::stream_disconnect(connection_id);
+    control[0]=0;
     if (owner == Owner::Tcp) {
         lab::capture_cancel(); owner = Owner::None; result_queued = false;
     }
     last_tcp_id = 0;
     client.stop();
     tcp_line.reset();
-    tx_size = tx_sent = 0;
+    tx_size = tx_sent = 0; tx_snapshot=false;
 }
 
 void stop_server()
@@ -82,14 +87,16 @@ void stop_server()
 
 void queue_reply(const char *reply)
 {
-    // Read the next command only after the previous reply has been sent.
+    // One bounded control reply may wait behind the line already being sent.
     const size_t len = strlen(reply);
-    if (len >= sizeof(tx) || tx_sent != tx_size) {
+    if (len >= sizeof(tx) || control[0]) {
         close_client();
         return;
     }
+    if (tx_sent != tx_size) { memcpy(control,reply,len+1); return; }
     memcpy(tx, reply, len);
     tx_size = len;
+    tx_snapshot = false;
     tx_sent = 0;
     tx_since = millis();
 }
@@ -110,7 +117,7 @@ void format_status(char *out, size_t size)
              "imu_probe_4b_rc=%d imu_probe_4a_rc=%d imu_probe_attempts=%lu imu_probe_ms=%lu "
              "imu_probe_sda=%d imu_probe_scl=%d imu_rst_low=%d imu_rst_high=%d "
              "imu_epoch=%lu grv_reports=%lu mag_reports=%lu grv_sequence_gaps=%lu mag_sequence_gaps=%lu "
-             "rv_us=%lu grv_us=%lu mag_us=%lu rv_confirmed_us=%ld grv_confirmed_us=%ld mag_confirmed_us=%ld\n",
+             "rv_us=%lu grv_us=%lu mag_us=%lu rv_confirmed_us=%ld grv_confirmed_us=%ld mag_confirmed_us=%ld stream_state=%s stream_session_id=%lu\n",
              state_name(), ip.c_str(), online ? static_cast<long>(WiFi.RSSI()) : 0L,
              server_started ? "LISTENING" : "OFF", static_cast<unsigned>(LAB_TCP_PORT),
              static_cast<unsigned>(hostedIsInitialized()),
@@ -130,7 +137,7 @@ void format_status(char *out, size_t size)
              (unsigned long)product.game.sequence_gaps, (unsigned long)product.mag.sequence_gaps,
              (unsigned long)product.rv_interval_us, (unsigned long)product.game_interval_us,
              (unsigned long)product.mag_interval_us, (long)product.rv_confirmed_us,
-             (long)product.game_confirmed_us, (long)product.mag_confirmed_us);
+             (long)product.game_confirmed_us, (long)product.mag_confirmed_us, lab::stream_state(), (unsigned long)lab::stream_session_id());
 }
 
 void command(const char *line, bool from_serial)
@@ -138,6 +145,11 @@ void command(const char *line, bool from_serial)
     char reply[sizeof(tx)];
     if (strcmp(line, "STATUS") == 0) {
         format_status(reply, sizeof(reply));
+    } else if (strncmp(line, "STREAM_IMU", 10) == 0) {
+        if (from_serial) snprintf(reply,sizeof(reply),"# ERR STREAM_IMU code=TCP_ONLY\n");
+        else lab::stream_command(line,connection_id,reply,sizeof(reply));
+    } else if (lab::stream_busy()) {
+        snprintf(reply,sizeof(reply),"# ERR BUSY\n");
     } else if (strcmp(line, "IMU_RESET") == 0) {
         if (lab::capture_busy() || lab::calibration_busy()) {
             snprintf(reply, sizeof(reply), "# ERR BUSY\n");
@@ -172,7 +184,7 @@ void command(const char *line, bool from_serial)
     if (from_serial) {
         Serial.print(reply);
     } else {
-        queue_reply(reply);
+        if (reply[0]) queue_reply(reply);
     }
 }
 
@@ -209,7 +221,7 @@ void service_tcp()
             char hello[sizeof(tx)];
             snprintf(hello, sizeof(hello),
                      "# HELLO MM1LAB 3 stage=multi_report_capture boot_id=%s connection_id=%lu\n"
-                     "# META capture=single commands=STATUS,CAPTURE,CAPTURE_IMU,CAL_IMU,IMU_RESET cal_schema=1 cal_line_max=2048 schema=3 n_max=1 timeout_ms=9000 "
+                     "# META capture=single commands=STATUS,CAPTURE,CAPTURE_IMU,CAL_IMU,IMU_RESET,STREAM_IMU stream_imu=1 stream_schema=1 cal_schema=1 cal_line_max=2048 schema=3 n_max=1 timeout_ms=9000 "
                      "imu_reports=rotation_vector,game_rotation_vector,magnetic_field_calibrated "
                      "rv_id=0x05 grv_id=0x08 mag_id=0x03 rv_requested_us=20000 grv_requested_us=20000 mag_requested_us=20000 "
                      "intervals=nominal_acquisition confirmed_intervals=STATUS unknown_interval=-1 "
@@ -231,6 +243,39 @@ void service_tcp()
     if (millis() - client_activity >= 60000UL) {
         close_client();
         return;
+    }
+    // Continue reading STOP/PING while a bounded partial line is in flight.
+    // Control waits behind that complete line; bytes are never interleaved.
+    if (!control[0]) {
+        for (size_t count = 0; count < 128 && client.available(); ++count) {
+            const auto result = tcp_line.push(static_cast<char>(client.read()));
+            client_activity = millis();
+            if (result == LabLineReader::Result::Line) {
+                command(tcp_line.line(), false);
+                break;
+            }
+            if (result == LabLineReader::Result::TooLong || result == LabLineReader::Result::Invalid) {
+                queue_reply(result == LabLineReader::Result::TooLong
+                                ? "# ERR LINE_TOO_LONG\n" : "# ERR BAD_COMMAND\n");
+                break;
+            }
+        }
+    }
+    if (tx_sent == tx_size && control[0]) {
+        char pending[sizeof(control)]; strcpy(pending,control); control[0]=0;
+        queue_reply(pending);
+    }
+    if (tx_snapshot && tx_sent==0 && !control[0]) {
+        if (strcmp(lab::stream_state(),"STREAMING")) {
+            tx_size=0; tx_snapshot=false; // No byte of this snapshot has left the device.
+        } else {
+            char latest[sizeof(tx)];
+            if (lab::stream_output(latest,sizeof(latest),true)) {
+                // Replace only a completely unstarted snapshot, retaining novelty bits.
+                const uint32_t since=tx_since;
+                tx_size=tx_sent=0; queue_reply(latest); tx_snapshot=true; tx_since=since;
+            }
+        }
     }
     if (tx_sent < tx_size) {
         // NetworkClient::write can retry/block. Send a small reply without waiting.
@@ -256,19 +301,13 @@ void service_tcp()
         queue_reply(response); result_queued = true;
         return;
     }
-    for (size_t count = 0; count < 128 && client.available(); ++count) {
-        const auto result = tcp_line.push(static_cast<char>(client.read()));
-        client_activity = millis();
-        if (result == LabLineReader::Result::Line) {
-            command(tcp_line.line(), false);
-            break;
-        }
-        if (result == LabLineReader::Result::TooLong || result == LabLineReader::Result::Invalid) {
-            queue_reply(result == LabLineReader::Result::TooLong
-                            ? "# ERR LINE_TOO_LONG\n" : "# ERR BAD_COMMAND\n");
-            break;
+    if (tx_sent == tx_size && !control[0]) {
+        char output[sizeof(tx)];
+        if (lab::stream_output(output,sizeof(output))) {
+            queue_reply(output); tx_snapshot=output[0]>='0' && output[0]<='9';
         }
     }
+
 }
 
 void start_server()

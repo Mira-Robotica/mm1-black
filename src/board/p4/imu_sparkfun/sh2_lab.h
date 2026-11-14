@@ -11,6 +11,8 @@ typedef enum { SH2_LAB_GET_CAL, SH2_LAB_SET_CAL, SH2_LAB_SAVE_DCD } sh2_LabOp;
 int sh2_lab_start(sh2_LabOp op, uint8_t mask, uint32_t timeout_us);
 bool sh2_lab_result(int *status, uint8_t *mask);
 bool sh2_lab_busy(void);
+// Send-only Get Feature; response is delivered via SH2_GET_FEATURE_RESP.
+int sh2_lab_get_feature(uint8_t sensor_id);
 void sh2_lab_abort(void);
 typedef struct {
     int tx_rc;

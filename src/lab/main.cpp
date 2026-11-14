@@ -7,6 +7,7 @@
 #include "network.h"
 #include "capture_service.h"
 #include "calibration_service.h"
+#include "stream_service.h"
 
 #if !defined(MM1_BOARD_P4) || !defined(MM1_LAB)
 #error "Build this entry point with env:mm1_p4_lab."
@@ -36,6 +37,7 @@ void loop()
 {
     lab::capture_tick();
     lab::calibration_tick();
+    lab::stream_tick();
     lab::network_tick();
     delay(5);
 }

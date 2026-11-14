@@ -21,6 +21,8 @@ P4ImuMagSample mag_sample{};
 bool game_valid = false, mag_valid = false;
 P4ImuDiagnostics diag{};
 P4ImuLabInfo info{};
+P4ImuStreamSample stream_samples[5]{};
+P4ImuFeature features[5]{};
 char failure[80] = "NOT_STARTED";
 uint32_t reset_released_ms = 0;
 unsigned error_logs = 0;
@@ -36,11 +38,49 @@ void feedback(P4ImuFeedback &f, const sh2_SensorValue_t &v, float accuracy = 0)
     f.received_ms = millis();
     f.accuracy_rad = accuracy;
 }
+void stream_sensor(const sh2_SensorValue_t &v)
+{
+    unsigned group = 0;
+    while (group < 5 && P4_STREAM_IDS[group] != v.sensorId) ++group;
+    if (group == 5) return;
+    auto &old = stream_samples[group];
+    if (old.valid && old.sequence == v.sequence) return;
+    P4ImuStreamSample next{};
+    next.sequence = v.sequence; next.status = v.status & 3;
+    next.received_ms = millis(); next.epoch = diag.epoch;
+    next.generation = old.generation + 1;
+    if (group == 0) {
+        const auto &m = v.un.rawMagnetometer;
+        next.v[0] = m.x; next.v[1] = m.y; next.v[2] = m.z;
+        next.raw_timestamp_us = m.timestamp;
+    } else if (group == 1) {
+        const auto &m = v.un.magneticFieldUncal;
+        next.v[0] = m.x; next.v[1] = m.y; next.v[2] = m.z;
+        if (!std::isfinite(m.biasX) || !std::isfinite(m.biasY) || !std::isfinite(m.biasZ)) return;
+    } else if (group == 2) {
+        const auto &m = v.un.magneticField;
+        next.v[0] = m.x; next.v[1] = m.y; next.v[2] = m.z;
+    } else if (group == 3) {
+        const auto &q = v.un.rotationVector;
+        next.v[0] = q.real; next.v[1] = q.i; next.v[2] = q.j; next.v[3] = q.k;
+        if (!std::isfinite(q.accuracy) || q.accuracy < 0) return;
+    } else {
+        const auto &q = v.un.gameRotationVector;
+        next.v[0] = q.real; next.v[1] = q.i; next.v[2] = q.j; next.v[3] = q.k;
+    }
+    for (float f : next.v) if (!std::isfinite(f)) return;
+    if (group >= 3) {
+        float norm2 = 0; for (float f : next.v) norm2 += f*f;
+        if (std::fabs(std::sqrt(norm2)-1.f) > 0.02f) return;
+    }
+    next.valid = true; old = next;
+}
 void sensor(void *, sh2_SensorEvent_t *event)
 {
     if (!ready || reconfigure) return;
     sh2_SensorValue_t v{};
     if (sh2_decodeSensorEvent(&v, event) != SH2_OK) { ++diag.decode_errors; return; }
+    stream_sensor(v);
     if (v.sensorId == SH2_ROTATION_VECTOR) {
         if (sequence_known && v.sequence == last_sequence) return;
         if (sequence_known && uint8_t(v.sequence - last_sequence) != 1) ++diag.sequence_gaps;
@@ -116,6 +156,13 @@ void p4_sparkfun_feature(unsigned char id, unsigned long interval)
     if (id == SH2_GAME_ROTATION_VECTOR) info.game_confirmed_us = interval;
     if (id == SH2_MAGNETIC_FIELD_CALIBRATED) info.mag_confirmed_us = interval;
 }
+void p4_sparkfun_feature_config(unsigned char id, const sh2_SensorConfig_t &config)
+{
+    p4_sparkfun_feature(id, config.reportInterval_us);
+    for (unsigned g = 0; g < 5; ++g) if (P4_STREAM_IDS[g] == id) {
+        features[g].config = config; features[g].known = true; ++features[g].generation;
+    }
+}
 void p4_sparkfun_protocol_error(unsigned char event)
 {
     ++diag.decode_errors;
@@ -131,6 +178,7 @@ void p4_sparkfun_rx_error(const char *stage, const unsigned char *header, unsign
 }
 void p4_sparkfun_reset()
 {
+    for (auto &f : features) f.known = false;
     sh2_lab_abort();
     p4_imu_lab_invalidate();
     info.autosave_rc = SH2_ERR;
@@ -144,6 +192,7 @@ void p4_sparkfun_reset()
 void p4_imu_lab_invalidate()
 {
     sample_valid = sequence_known = false;
+    for (auto &s : stream_samples) s.valid = false;
     game_valid = mag_valid = false;
     info.rv.present = info.game.present = info.mag.present = false;
 }
@@ -159,6 +208,7 @@ bool p4_imu_begin(uint8_t addr)
     address = addr;
     p4_imu_lab_invalidate();
     info = {};
+    for (auto &f : features) f.known = false;
     info.autosave_rc = SH2_ERR;
     const uint32_t started = millis();
     diag.init_ms = 0;
@@ -316,3 +366,18 @@ bool p4_imu_get_quat(float *w, float *x, float *y, float *z, int *accuracy)
 }
 bool p4_imu_get_accel(float *, float *, float *) { return false; }
 void p4_imu_scan(char *buf, size_t size) { if (buf && size) snprintf(buf, size, "%s", failure); }
+
+bool p4_imu_reset_pending() { return reset_pending || reconfigure || initializing; }
+P4ImuStreamSample p4_imu_stream_sample(unsigned g) { return g < 5 ? stream_samples[g] : P4ImuStreamSample{}; }
+P4ImuFeature p4_imu_feature(unsigned g) { return g < 5 ? features[g] : P4ImuFeature{}; }
+int p4_imu_set_feature(unsigned g, const sh2_SensorConfig_t &c)
+{
+    if (g >= 5 || sh2_lab_busy()) return SH2_ERR_OP_IN_PROGRESS;
+    const int rc = sh2_setSensorConfig(sh2_SensorId_t(P4_STREAM_IDS[g]), &c);
+    if (rc == SH2_OK) {
+        if (g == 2) { info.mag_interval_us = c.reportInterval_us; info.mag_confirmed_us = -1; }
+        if (g == 3) { info.rv_interval_us = c.reportInterval_us; info.rv_confirmed_us = -1; }
+        if (g == 4) { info.game_interval_us = c.reportInterval_us; info.game_confirmed_us = -1; }
+    }
+    return rc;
+}

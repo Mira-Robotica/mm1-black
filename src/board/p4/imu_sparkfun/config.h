@@ -14,7 +14,7 @@
 #define MM1_LAB_IMU_PROBE_WINDOW_MS 500
 #define MM1_LAB_IMU_PROBE_INTERVAL_MS 10
 #define MM1_LAB_IMU_LIBRARY "SparkFun-1.0.6"
-#define MM1_LAB_IMU_REVISION "fd0149c+mm1.5"
+#define MM1_LAB_IMU_REVISION "fd0149c+mm1.6"
 
 #define MM1_LAB_STRINGIFY_(value) #value
 #define MM1_LAB_STRINGIFY(value) MM1_LAB_STRINGIFY_(value)

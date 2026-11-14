@@ -541,6 +541,8 @@ static uint8_t getReportLen(sh2_t *pSh2, uint8_t reportId)
     case SH2_MAGNETIC_FIELD_CALIBRATED: return 10;
     case SH2_ROTATION_VECTOR: return 14;
     case SH2_GAME_ROTATION_VECTOR: return 12;
+    case SH2_RAW_MAGNETOMETER:
+    case SH2_MAGNETIC_FIELD_UNCALIBRATED: return 16;
     default: break;
     }
 #endif
@@ -708,6 +710,15 @@ static int sendCtrl(sh2_t *pSh2, const uint8_t *data, uint16_t len)
 {
     return shtp_send(pSh2->pShtp, pSh2->controlChan, data, len);
 }
+
+#if defined(MM1_LAB)
+int sh2_lab_get_feature(uint8_t sensor_id)
+{
+    if (sh2_lab_busy()) return SH2_ERR_OP_IN_PROGRESS;
+    const uint8_t req[] = {SENSORHUB_GET_FEATURE_REQ, sensor_id};
+    return sendCtrl(&_sh2, req, sizeof(req));
+}
+#endif
 
 static int16_t toQ14(double x)
 {

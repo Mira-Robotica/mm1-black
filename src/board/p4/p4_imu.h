@@ -76,6 +76,24 @@ struct P4ImuLabInfo {
     // Last Get Feature Response; cleared to -1 on each configuration/reset.
     int32_t rv_confirmed_us = -1, game_confirmed_us = -1, mag_confirmed_us = -1;
 };
+// Streaming order is a wire contract: Raw, Uncalibrated, Calibrated, RV, GRV.
+#include "SparkFun_BNO08x_Arduino_Library-1.0.6/src/sh2.h"
+constexpr uint8_t P4_STREAM_IDS[5] = {0x16, 0x0f, 0x03, 0x05, 0x08};
+struct P4ImuStreamSample {
+    float v[4]{}; // magnetic xyz or quaternion wxyz, never normalized
+    uint32_t generation = 0, received_ms = 0, epoch = 0, raw_timestamp_us = 0;
+    uint8_t sequence = 0, status = 0;
+    bool valid = false;
+};
+struct P4ImuFeature {
+    sh2_SensorConfig_t config{};
+    uint32_t generation = 0;
+    bool known = false;
+};
+bool p4_imu_reset_pending();
+P4ImuStreamSample p4_imu_stream_sample(unsigned group);
+P4ImuFeature p4_imu_feature(unsigned group);
+int p4_imu_set_feature(unsigned group, const sh2_SensorConfig_t &config);
 P4ImuLabInfo p4_imu_lab_info();
 int p4_imu_lab_report(uint8_t sensor_id, uint32_t interval_us);
 void p4_imu_lab_invalidate();

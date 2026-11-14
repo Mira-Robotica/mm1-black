@@ -13,3 +13,8 @@ struct Orientation {
 // Raw quaternion is never normalized or changed. Unit norm tolerance: 0.02.
 Orientation orientation(float w, float x, float y, float z, float bx, float by, float bz);
 }
+
+namespace lab {
+// GRV supplies only body-frame up. min_horizontal is in the vector's units.
+float magnetic_azimuth(const float q[4], const float m[3], float min_horizontal);
+}
