@@ -8,3 +8,9 @@ __pycache__/
 !data/20261114T184620.052565Z_989139b4503646d4bc42b772811b4063/
 !data/RELATORIO_E1.md
 !data/20261114T205421.149786Z_ad548873a052428ab1af27b3cc52eaff/
+
+# Experimento 2, coleta de 15/11/2026 (UTC).
+!data/experiment-2026-11-15T00-51-46.783538Z.jsonl
+
+# Experimento 3, coleta de 15/11/2026 (UTC).
+!data/experiment-2026-11-15T01-55-04.075170Z.jsonl
